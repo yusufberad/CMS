@@ -1,0 +1,71 @@
+{
+  "name": "cloud-file-manager",
+  "version": "1.0.0",
+  "description": "FTP ve Amazon S3 destekli masaüstü dosya yöneticisi",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "keywords": [
+    "electron",
+    "ftp",
+    "s3",
+    "amazon",
+    "file-manager"
+  ],
+  "author": "Furkan",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.454.0",
+    "@aws-sdk/lib-storage": "^3.454.0",
+    "@aws-sdk/s3-request-presigner": "^3.454.0",
+    "@smithy/node-http-handler": "^4.4.5",
+    "basic-ftp": "^5.0.4"
+  },
+  "build": {
+    "appId": "com.cloudfilemanager.app",
+    "productName": "Cloud File Manager",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  }
+}
