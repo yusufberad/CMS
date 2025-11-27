@@ -3,6 +3,7 @@ const {
   ListBucketsCommand,
   ListObjectsV2Command,
   GetObjectCommand,
+  PutObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
   HeadBucketCommand,
@@ -170,6 +171,18 @@ class S3Service {
     }
 
     const fileSize = fs.statSync(localPath).size;
+    const FIVE_MB = 5 * 1024 * 1024;
+
+    if (fileSize <= FIVE_MB) {
+      await this.uploadSmallObject({
+        localPath,
+        bucket,
+        key,
+        fileSize,
+        onProgress,
+      });
+      return;
+    }
 
     // ÖNEMLİ: Küçük buffer = Hızlı başlangıç (progress hemen gelir)
     // Büyük buffer = Yavaş başlangıç ama potansiyel olarak daha hızlı throughput
@@ -185,11 +198,7 @@ class S3Service {
     let partSize;
     let queueSize;
 
-    if (fileSize < 5 * 1024 * 1024) {
-      // < 5MB: Single part upload (multipart yok, direkt upload)
-      partSize = fileSize;
-      queueSize = 1;
-    } else if (fileSize < 50 * 1024 * 1024) {
+    if (fileSize < 50 * 1024 * 1024) {
       // 5-50MB: 5MB chunks (minimum, hızlı progress gösterimi)
       partSize = 5 * 1024 * 1024;
       queueSize = 4;
@@ -300,6 +309,40 @@ class S3Service {
     );
   }
 
+  async uploadSmallObject({ localPath, bucket, key, fileSize, onProgress }) {
+    if (onProgress) {
+      onProgress({
+        percentage: 0,
+        uploaded: 0,
+        total: fileSize,
+        fileName: path.basename(localPath),
+      });
+    }
+
+    const stream = fs.createReadStream(localPath);
+    if (onProgress) {
+      let uploaded = 0;
+      stream.on("data", (chunk) => {
+        uploaded += chunk.length;
+        const percentage = Math.round((uploaded / fileSize) * 100);
+        onProgress({
+          percentage,
+          uploaded,
+          total: fileSize,
+          fileName: path.basename(localPath),
+        });
+      });
+    }
+
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: stream,
+      })
+    );
+  }
+
   async download(bucket, key, localPath, onProgress) {
     // Önce dosya boyutunu al
     const headCommand = new HeadObjectCommand({
@@ -363,6 +406,15 @@ class S3Service {
     });
 
     await this.client.send(command);
+  }
+
+  async generateShareLink(bucket, key, expiresIn = 3600) {
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+
+    return getSignedUrl(this.client, command, { expiresIn });
   }
 
   async getObjectInfo(bucket, key) {

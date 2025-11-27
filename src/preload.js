@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   s3Upload: (data) => ipcRenderer.invoke("s3-upload", data),
   s3Download: (data) => ipcRenderer.invoke("s3-download", data),
   s3Delete: (data) => ipcRenderer.invoke("s3-delete", data),
+  s3GenerateShareLink: (data) =>
+    ipcRenderer.invoke("s3-generate-share-link", data),
   s3GetTags: (data) => ipcRenderer.invoke("s3-get-tags", data),
   s3PutTags: (data) => ipcRenderer.invoke("s3-put-tags", data),
   s3DeleteTags: (data) => ipcRenderer.invoke("s3-delete-tags", data),
@@ -38,6 +40,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getImagePreview: (data) => ipcRenderer.invoke("get-image-preview", data),
   getVideoPreview: (data) => ipcRenderer.invoke("get-video-preview", data),
   cleanupVideo: (videoId) => ipcRenderer.invoke("cleanup-video", videoId),
+
+  getPlatform: () => process.platform,
 
   // Progress olayları
   onUploadProgress: (callback) =>

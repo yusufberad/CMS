@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "com.cloudfilemanager.app",
-    "productName": "Cloud File Manager",
+    "productName": "Heysem Cloud Manager",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "compression": "maximum",
     "asar": true,

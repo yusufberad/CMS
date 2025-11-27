@@ -1,4 +1,4 @@
-# Cloud File Manager
+# Heysem Cloud Manager
 
 FTP ve Amazon S3 destekli modern masaüstü dosya yöneticisi uygulaması.
 

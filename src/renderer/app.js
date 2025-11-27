@@ -1,5 +1,5 @@
 // ============================================
-// Cloud File Manager - Renderer Script
+// Heysem Cloud Manager - Renderer Script
 // ============================================
 
 class CloudFileManager {
@@ -16,16 +16,52 @@ class CloudFileManager {
     this.transferIdCounter = 0;
     this.lastProgressUpdate = { time: 0, bytes: 0 };
     this.speedHistory = [];
+    this.searchQuery = "";
+    this.sortBy = "name";
+    this.sortDirection = "asc";
+    this.dragCounter = 0;
+    this.dropOverlay = null;
+    this.theme = "light";
+    this.themeStorageKey = "heysem_cloud_theme";
+    this.progressAnimation = {
+      displayedPercent: 0,
+      targetPercent: 0,
+      displayedBytes: 0,
+      targetBytes: 0,
+      totalBytes: 0,
+      displayedSpeed: 0,
+      targetSpeed: 0,
+      frame: null,
+      lastFrame: 0,
+      fileName: "",
+      etaText: "Tahminleniyor...",
+    };
+    this.platform =
+      (window.electronAPI && window.electronAPI.getPlatform
+        ? window.electronAPI.getPlatform()
+        : undefined) || "browser";
+    this.isMac = this.platform === "darwin";
+
+    if (this.isMac) {
+      document.body.classList.add("is-macos");
+    } else {
+      document.body.classList.remove("is-macos");
+    }
 
     // Debug timestamps
     this.debugTimestamps = new Map();
     this.enableDebug = false; // Debug modunu aç/kapa
+    this.activeActionMenu = null;
+    this.boundActionMenuOutsideClick =
+      this.handleActionMenuOutsideClick.bind(this);
 
     this.init();
   }
 
   init() {
+    this.initTheme();
     this.bindEvents();
+    this.setupDragAndDrop();
     this.setupProgressListeners();
     this.showQuickLogin();
   }
@@ -74,16 +110,23 @@ class CloudFileManager {
       .addEventListener("click", () => this.downloadFile());
     document
       .getElementById("btn-new-folder")
-      .addEventListener("click", () => this.showNewFolderModal());
-    document
-      .getElementById("btn-delete")
-      .addEventListener("click", () => this.deleteFile());
+      ?.addEventListener("click", () => this.showNewFolderModal());
     document
       .getElementById("btn-tags")
       .addEventListener("click", () => this.showTagsModal());
     document
       .getElementById("btn-refresh")
       .addEventListener("click", () => this.refreshFileList());
+    document
+      .getElementById("btn-open-shared-link")
+      .addEventListener("click", () => this.showSharedLinkModal());
+
+    const searchInput = document.getElementById("file-search-input");
+    if (searchInput) {
+      searchInput.addEventListener("input", (event) =>
+        this.handleSearchInput(event.target.value)
+      );
+    }
 
     // Bucket seçimi
     document.getElementById("bucket-list").addEventListener("change", (e) => {
@@ -95,9 +138,10 @@ class CloudFileManager {
     });
 
     // Yeni bucket
-    document
-      .getElementById("btn-new-bucket")
-      .addEventListener("click", () => this.showNewBucketModal());
+    const newBucketBtn = document.getElementById("btn-new-bucket");
+    if (newBucketBtn) {
+      newBucketBtn.addEventListener("click", () => this.showNewBucketModal());
+    }
 
     // Modal olayları
     document
@@ -106,12 +150,20 @@ class CloudFileManager {
         el.addEventListener("click", () => this.closeModals());
       });
 
+    const deleteBtn = document.getElementById("btn-delete");
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", () => this.deleteFile());
+    }
+
     document
       .getElementById("create-folder-btn")
       .addEventListener("click", () => this.createFolder());
     document
       .getElementById("create-bucket-btn")
       .addEventListener("click", () => this.createBucket());
+    document
+      .getElementById("open-shared-link-btn")
+      .addEventListener("click", () => this.openSharedLink());
 
     // Enter tuşu ile klasör oluştur
     document
@@ -145,6 +197,27 @@ class CloudFileManager {
 
     document.getElementById("enter-pin").addEventListener("keypress", (e) => {
       if (e.key === "Enter") this.unlockConnection();
+    });
+
+    document.getElementById("shared-link-input").addEventListener("keypress", (e) => {
+      if (e.key === "Enter") this.openSharedLink();
+    });
+
+    const copyShareBtn = document.getElementById("copy-share-link-btn");
+    if (copyShareBtn) {
+      copyShareBtn.addEventListener("click", () => this.copyShareLink());
+    }
+
+    document.querySelectorAll(".sortable").forEach((header) => {
+      header.addEventListener("click", () =>
+        this.handleSortInteraction(header.dataset.sortKey)
+      );
+      header.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          this.handleSortInteraction(header.dataset.sortKey);
+        }
+      });
     });
 
     // Quick login modal
@@ -273,6 +346,9 @@ class CloudFileManager {
     document.getElementById("bucket-list").innerHTML =
       '<option value="">Bucket seçin...</option>';
 
+    this.hideDropOverlay();
+    this.dragCounter = 0;
+
     this.showToast("Bağlantı kesildi", "info");
   }
 
@@ -298,7 +374,10 @@ class CloudFileManager {
       btn.disabled = true;
     });
     document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-delete").disabled = true;
+    const deleteBtn = document.getElementById("btn-delete");
+    if (deleteBtn) {
+      deleteBtn.disabled = true;
+    }
   }
 
   disableConnectionForm(type) {
@@ -409,26 +488,25 @@ class CloudFileManager {
   renderFileList() {
     const container = document.getElementById("file-list");
 
-    if (this.files.length === 0) {
+    const filesToRender = this.getFilteredAndSortedFiles();
+
+    if (filesToRender.length === 0) {
+      const message = this.searchQuery
+        ? "Arama kriterlerine uygun dosya bulunamadı"
+        : "Bu klasör boş";
       container.innerHTML = `
         <div class="empty-state">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
-          <p>Bu klasör boş</p>
+          <p>${message}</p>
         </div>
       `;
+      this.updateSortIndicators();
       return;
     }
 
-    // Klasörleri önce, dosyaları sonra sırala
-    const sortedFiles = [...this.files].sort((a, b) => {
-      if (a.type === "directory" && b.type !== "directory") return -1;
-      if (a.type !== "directory" && b.type === "directory") return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    container.innerHTML = sortedFiles
+    container.innerHTML = filesToRender
       .map(
         (file, index) => `
       <div class="file-item" data-name="${file.name}" data-type="${
@@ -464,6 +542,37 @@ class CloudFileManager {
         <div class="file-type">${
           file.type === "directory" ? "Klasör" : this.getFileType(file.name)
         }</div>
+        <div class="file-actions">
+          <button class="file-action-trigger" title="İşlemler" aria-label="Dosya işlemleri">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="5" r="1.5"/>
+              <circle cx="12" cy="12" r="1.5"/>
+              <circle cx="12" cy="19" r="1.5"/>
+            </svg>
+          </button>
+          <div class="file-action-menu">
+            <button class="file-action-btn share" data-action="share">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="6" r="3"/>
+                <circle cx="18" cy="18" r="3"/>
+                <line x1="8.59" y1="10.51" x2="15.42" y2="7.49"/>
+                <line x1="8.59" y1="13.49" x2="15.42" y2="16.51"/>
+              </svg>
+              <span>Paylaş</span>
+            </button>
+            <button class="file-action-btn delete" data-action="delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M10 11v6"/>
+                <path d="M14 11v6"/>
+                <path d="M5 6l1 14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-14"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+              <span>Sil</span>
+            </button>
+          </div>
+        </div>
       </div>
     `
       )
@@ -473,6 +582,224 @@ class CloudFileManager {
     container.querySelectorAll(".file-item").forEach((item) => {
       item.addEventListener("click", (e) => this.selectFile(item));
     });
+
+    this.bindFileActions(container);
+    this.updateSortIndicators();
+  }
+
+  getFilteredAndSortedFiles() {
+    if (!Array.isArray(this.files)) return [];
+
+    const query = this.searchQuery.trim().toLowerCase();
+    const filtered = query
+      ? this.files.filter((file) =>
+          file.name.toLowerCase().includes(query)
+        )
+      : [...this.files];
+
+    return filtered.sort((a, b) => this.compareFiles(a, b));
+  }
+
+  compareFiles(a, b) {
+    const direction = this.sortDirection === "asc" ? 1 : -1;
+    const sortKey = this.sortBy;
+
+    if (sortKey === "name") {
+      if (a.type === "directory" && b.type !== "directory") return -1;
+      if (a.type !== "directory" && b.type === "directory") return 1;
+      return (
+        a.name.localeCompare(b.name, "tr", { sensitivity: "base" }) * direction
+      );
+    }
+
+    const valueA = this.getSortValue(a, sortKey);
+    const valueB = this.getSortValue(b, sortKey);
+
+    if (valueA < valueB) return -1 * direction;
+    if (valueA > valueB) return 1 * direction;
+
+    return (
+      a.name.localeCompare(b.name, "tr", { sensitivity: "base" }) * direction
+    );
+  }
+
+  getSortValue(file, key) {
+    switch (key) {
+      case "size":
+        return file.type === "directory" ? 0 : file.size || 0;
+      case "date":
+        return file.modifiedAt ? new Date(file.modifiedAt).getTime() : 0;
+      case "type":
+        return `${file.type}-${this.getFileType(file.name).toLowerCase()}`;
+      default:
+        return file.name.toLowerCase();
+    }
+  }
+
+  handleSearchInput(value) {
+    this.searchQuery = value ?? "";
+    this.renderFileList();
+  }
+
+  handleSortInteraction(sortKey) {
+    if (!sortKey) return;
+    if (this.sortBy === sortKey) {
+      this.sortDirection = this.sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      this.sortBy = sortKey;
+      this.sortDirection = "asc";
+    }
+    this.renderFileList();
+  }
+
+  updateSortIndicators() {
+    document.querySelectorAll(".sortable").forEach((header) => {
+      const key = header.dataset.sortKey;
+      const isActive = key === this.sortBy;
+      header.classList.toggle("active", isActive);
+      const indicator = header.querySelector(".sort-indicator");
+      if (indicator) {
+        indicator.dataset.direction = isActive ? this.sortDirection : "";
+      }
+    });
+  }
+
+  bindFileActions(container) {
+    container.querySelectorAll(".file-action-trigger").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.toggleFileActionMenu(btn);
+      });
+    });
+
+    container.querySelectorAll(".file-action-btn").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const action = btn.dataset.action;
+        const fileItem = btn.closest(".file-item");
+        this.closeAllActionMenus();
+
+        if (!fileItem) return;
+        this.selectFile(fileItem);
+
+        if (action === "delete") {
+          this.deleteFile();
+        } else if (action === "share") {
+          this.shareSelectedFile();
+        }
+      });
+    });
+  }
+
+  setupDragAndDrop() {
+    this.dropOverlay = document.getElementById("drop-overlay");
+    if (!this.dropOverlay) return;
+
+    const preventDefaults = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+      document.addEventListener(eventName, preventDefaults, false);
+    });
+
+    document.addEventListener(
+      "dragenter",
+      (event) => {
+        if (!this.isConnected) return;
+        const hasFiles = Array.from(event.dataTransfer?.types || []).includes(
+          "Files"
+        );
+        if (!hasFiles) return;
+        this.dragCounter += 1;
+        this.showDropOverlay();
+      },
+      false
+    );
+
+    document.addEventListener(
+      "dragover",
+      (event) => {
+        if (!this.isConnected) return;
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = "copy";
+        }
+      },
+      false
+    );
+
+    document.addEventListener(
+      "dragleave",
+      () => {
+        this.dragCounter = Math.max(0, this.dragCounter - 1);
+        if (this.dragCounter === 0) {
+          this.hideDropOverlay();
+        }
+      },
+      false
+    );
+
+    document.addEventListener(
+      "drop",
+      async (event) => {
+        this.dragCounter = 0;
+        this.hideDropOverlay();
+
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (!files.length) return;
+
+        const paths = files.map((file) => file.path).filter(Boolean);
+        if (!paths.length) {
+          this.showToast("Bırakılan dosyalar okunamadı", "error");
+          return;
+        }
+
+        await this.uploadSelectedFiles(paths);
+      },
+      false
+    );
+  }
+
+  showDropOverlay() {
+    if (!this.dropOverlay) return;
+    this.dropOverlay.classList.remove("hidden");
+    this.dropOverlay.classList.add("show");
+  }
+
+  hideDropOverlay() {
+    if (!this.dropOverlay) return;
+    this.dropOverlay.classList.remove("show");
+    this.dropOverlay.classList.add("hidden");
+  }
+
+  toggleFileActionMenu(button) {
+    const menu = button.nextElementSibling;
+    if (!menu) return;
+
+    const isOpen = menu.classList.contains("open");
+    this.closeAllActionMenus();
+
+    if (!isOpen) {
+      menu.classList.add("open");
+      this.activeActionMenu = menu;
+      document.addEventListener("click", this.boundActionMenuOutsideClick);
+    }
+  }
+
+  closeAllActionMenus() {
+    document
+      .querySelectorAll(".file-action-menu.open")
+      .forEach((menu) => menu.classList.remove("open"));
+
+    this.activeActionMenu = null;
+    document.removeEventListener("click", this.boundActionMenuOutsideClick);
+  }
+
+  handleActionMenuOutsideClick(event) {
+    if (!event.target.closest(".file-actions")) {
+      this.closeAllActionMenus();
+    }
   }
 
   selectFile(item) {
@@ -492,7 +819,10 @@ class CloudFileManager {
     // İndir ve Sil butonlarını etkinleştir (sadece dosyalar için indir)
     document.getElementById("btn-download").disabled =
       this.selectedFile.type === "directory";
-    document.getElementById("btn-delete").disabled = false;
+    const deleteBtn = document.getElementById("btn-delete");
+    if (deleteBtn) {
+      deleteBtn.disabled = false;
+    }
 
     // Tag butonu - sadece S3 ve dosyalar için
     const isS3File =
@@ -516,7 +846,10 @@ class CloudFileManager {
 
     this.selectedFile = null;
     document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-delete").disabled = true;
+    const deleteBtn = document.getElementById("btn-delete");
+    if (deleteBtn) {
+      deleteBtn.disabled = true;
+    }
   }
 
   updateBreadcrumb() {
@@ -566,9 +899,21 @@ class CloudFileManager {
 
     if (result.canceled || !result.filePaths.length) return;
 
+    await this.uploadSelectedFiles(result.filePaths);
+  }
+
+  async uploadSelectedFiles(filePaths = []) {
+    const paths = (filePaths || []).filter(Boolean);
+    if (!paths.length) return;
+
+    if (!this.isConnected) {
+      this.showToast("Dosya yüklemek için önce bağlanın", "error");
+      return;
+    }
+
     this.showProgress();
 
-    for (const localPath of result.filePaths) {
+    for (const localPath of paths) {
       // Transfer ID oluştur (debug için)
       const transferId = `upload-${Date.now()}-${Math.random()
         .toString(36)
@@ -776,6 +1121,252 @@ class CloudFileManager {
     document.getElementById("new-bucket-name").focus();
   }
 
+  showSharedLinkModal() {
+    const modal = document.getElementById("modal-shared-link");
+    if (!modal) return;
+    const input = document.getElementById("shared-link-input");
+    if (input) input.value = "";
+    modal.classList.remove("hidden");
+    setTimeout(() => input?.focus(), 50);
+  }
+
+  openSharedLink() {
+    const input = document.getElementById("shared-link-input");
+    if (!input) return;
+    const url = input.value.trim();
+
+    if (!url) {
+      this.showToast("Lütfen geçerli bir URL girin", "error");
+      return;
+    }
+
+    try {
+      new URL(url);
+    } catch (error) {
+      this.showToast("URL formatı geçersiz", "error");
+      return;
+    }
+
+    const type = this.detectSharedLinkType(url);
+    if (type === "unknown") {
+      this.showToast("Bu link için önizleme desteklenmiyor", "error");
+      return;
+    }
+
+    const fileName = this.getFileNameFromUrl(url);
+    this.closeModals();
+    this.openSharedPreview(type, url, fileName);
+  }
+
+  async shareSelectedFile() {
+    if (!this.selectedFile || this.selectedFile.type !== "file") {
+      this.showToast("Paylaşmak için bir dosya seçin", "error");
+      return;
+    }
+
+    if (this.connectionType !== "s3") {
+      this.showToast("Paylaşım sadece S3 dosyaları için destekleniyor", "error");
+      return;
+    }
+
+    if (!this.currentBucket) {
+      this.showToast("Lütfen bir bucket seçin", "error");
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.s3GenerateShareLink({
+        bucket: this.currentBucket,
+        key: this.selectedFile.key,
+        expiresIn: 3600, // 1 saat
+      });
+
+      if (result.success && result.url) {
+        this.showShareLinkResult(result.url);
+      } else {
+        this.showToast(result.message || "Paylaşım linki oluşturulamadı", "error");
+      }
+    } catch (error) {
+      this.showToast(`Paylaşım hatası: ${error.message}`, "error");
+    }
+  }
+
+  detectSharedLinkType(url) {
+    const cleanUrl = url.split("?")[0].split("#")[0];
+    const hasExtension = cleanUrl.includes(".");
+    const extension = hasExtension
+      ? cleanUrl.split(".").pop().toLowerCase()
+      : "";
+
+    if (extension && this.isImageFile(`preview.${extension}`)) {
+      return "image";
+    }
+
+    if (extension && this.isVideoFile(`preview.${extension}`)) {
+      return "video";
+    }
+
+    if (["pdf", "txt", "html", "htm"].includes(extension)) {
+      return "document";
+    }
+
+    return "unknown";
+  }
+
+  getFileNameFromUrl(url) {
+    try {
+      const { pathname } = new URL(url);
+      const segments = pathname.split("/").filter(Boolean);
+      const rawName = segments.length
+        ? decodeURIComponent(segments[segments.length - 1])
+        : "";
+      return rawName || "Paylaşılan içerik";
+    } catch (error) {
+      return "Paylaşılan içerik";
+    }
+  }
+
+  openSharedPreview(type, url, fileName) {
+    const modal = document.getElementById("modal-shared-preview");
+    if (!modal) return;
+
+    const loader = modal.querySelector(".shared-preview-loader");
+    const image = document.getElementById("shared-preview-image");
+    const video = document.getElementById("shared-preview-video");
+    const frame = document.getElementById("shared-preview-frame");
+    const unsupported = document.querySelector(".shared-preview-unsupported");
+
+    if (!loader || !image || !video || !frame || !unsupported) return;
+
+    this.resetSharedPreview();
+
+    document.getElementById("shared-preview-title").textContent =
+      fileName || "Paylaşılan içerik";
+
+    loader.style.display = "flex";
+    unsupported.classList.add("hidden");
+    image.style.display = "none";
+    video.style.display = "none";
+    frame.style.display = "none";
+
+    const showError = (message) => {
+      loader.style.display = "none";
+      unsupported.classList.remove("hidden");
+      if (message) {
+        this.showToast(message, "error");
+      }
+    };
+
+    modal.classList.remove("hidden");
+
+    if (type === "image") {
+      image.onload = () => {
+        loader.style.display = "none";
+        image.style.display = "block";
+      };
+      image.onerror = () => showError("Görsel yüklenemedi veya erişilemedi");
+      image.src = url;
+      return;
+    }
+
+    if (type === "video") {
+      video.onloadeddata = () => {
+        loader.style.display = "none";
+        video.style.display = "block";
+      };
+      video.onerror = () => showError("Video yüklenemedi veya erişilemedi");
+      video.src = url;
+      video.load();
+      return;
+    }
+
+    if (type === "document") {
+      frame.onload = () => {
+        loader.style.display = "none";
+        frame.style.display = "block";
+      };
+      frame.onerror = () =>
+        showError("İçerik görüntülenemedi veya erişilemedi");
+      frame.src = url;
+      return;
+    }
+
+    showError("Bu link için önizleme desteklenmiyor");
+  }
+
+  showShareLinkResult(url) {
+    const modal = document.getElementById("modal-share-result");
+    const output = document.getElementById("share-link-output");
+    if (!modal || !output) return;
+
+    output.value = url;
+    modal.classList.remove("hidden");
+    output.focus();
+    output.select();
+  }
+
+  async copyShareLink() {
+    const output = document.getElementById("share-link-output");
+    if (!output || !output.value) {
+      this.showToast("Kopyalanacak link bulunamadı", "error");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(output.value);
+      this.showToast("Link panoya kopyalandı!", "success");
+    } catch (error) {
+      output.select();
+      const successful = document.execCommand
+        ? document.execCommand("copy")
+        : false;
+      if (successful) {
+        this.showToast("Link panoya kopyalandı!", "success");
+      } else {
+        this.showToast("Kopyalama başarısız oldu", "error");
+      }
+    }
+  }
+
+  resetSharedPreview() {
+    const image = document.getElementById("shared-preview-image");
+    const video = document.getElementById("shared-preview-video");
+    const frame = document.getElementById("shared-preview-frame");
+    const loader = document.querySelector(".shared-preview-loader");
+    const unsupported = document.querySelector(".shared-preview-unsupported");
+
+    if (image) {
+      image.onload = null;
+      image.onerror = null;
+      image.src = "";
+      image.style.display = "none";
+    }
+
+    if (video) {
+      video.onloadeddata = null;
+      video.onerror = null;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video.style.display = "none";
+    }
+
+    if (frame) {
+      frame.onload = null;
+      frame.onerror = null;
+      frame.src = "";
+      frame.style.display = "none";
+    }
+
+    if (loader) {
+      loader.style.display = "flex";
+    }
+
+    if (unsupported) {
+      unsupported.classList.add("hidden");
+    }
+  }
+
   closeModals() {
     // Video varsa durdur ve temizle
     const videoElement = document.getElementById("preview-video");
@@ -796,6 +1387,8 @@ class CloudFileManager {
         delete videoElement.dataset.videoId;
       }
     }
+
+    this.resetSharedPreview();
 
     document.querySelectorAll(".modal").forEach((modal) => {
       modal.classList.add("hidden");
@@ -923,7 +1516,10 @@ class CloudFileManager {
 
     this.selectedFile = null;
     document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-delete").disabled = true;
+    const deleteBtn = document.getElementById("btn-delete");
+    if (deleteBtn) {
+      deleteBtn.disabled = true;
+    }
   }
 
   refreshFileList() {
@@ -1068,6 +1664,7 @@ class CloudFileManager {
 
   showProgress() {
     this.resetSpeedCalculation();
+    this.resetProgressAnimation();
     document.getElementById("progress-container").classList.remove("hidden");
   }
 
@@ -1076,29 +1673,21 @@ class CloudFileManager {
       document.getElementById("progress-container").classList.add("hidden");
       document.getElementById("progress-fill").style.width = "0%";
       this.resetSpeedCalculation();
+      this.resetProgressAnimation();
     }, 500);
   }
 
   updateProgress(progress, type) {
-    document.getElementById("progress-filename").textContent =
-      progress.fileName;
-    document.getElementById(
-      "progress-percent"
-    ).textContent = `${progress.percentage}%`;
-    document.getElementById(
-      "progress-fill"
-    ).style.width = `${progress.percentage}%`;
-
     const size = type === "upload" ? progress.uploaded : progress.downloaded;
-    document.getElementById("progress-size").textContent = `${this.formatSize(
-      size
-    )} / ${this.formatSize(progress.total)}`;
-
-    // Hız hesaplama
     const speed = this.calculateSpeed(size);
-    document.getElementById("progress-speed").textContent = `${this.formatSize(
-      speed
-    )}/s`;
+
+    this.progressAnimation.fileName = progress.fileName;
+    this.progressAnimation.targetPercent = progress.percentage;
+    this.progressAnimation.targetBytes = size;
+    this.progressAnimation.totalBytes = progress.total;
+    this.progressAnimation.targetSpeed = speed;
+
+    this.startProgressAnimation();
   }
 
   calculateSpeed(currentBytes) {
@@ -1141,6 +1730,109 @@ class CloudFileManager {
     this.lastProgressUpdate = { time: 0, bytes: 0 };
     this.speedHistory = [];
     document.getElementById("progress-speed").textContent = "0 KB/s";
+  }
+  resetProgressAnimation() {
+    this.stopProgressAnimation();
+    this.progressAnimation.displayedPercent = 0;
+    this.progressAnimation.targetPercent = 0;
+    this.progressAnimation.displayedBytes = 0;
+    this.progressAnimation.targetBytes = 0;
+    this.progressAnimation.totalBytes = 0;
+    this.progressAnimation.displayedSpeed = 0;
+    this.progressAnimation.targetSpeed = 0;
+    this.progressAnimation.lastFrame = 0;
+    this.progressAnimation.fileName = "";
+    this.progressAnimation.etaText = "Tahminleniyor...";
+    document.getElementById("progress-filename").textContent = "";
+    document.getElementById("progress-percent").textContent = "0%";
+    document.getElementById("progress-size").textContent = "0 KB / 0 KB";
+    document.getElementById("progress-speed").textContent = "0 KB/s";
+    document.getElementById("progress-eta").textContent = "Tahminleniyor...";
+  }
+
+  startProgressAnimation() {
+    if (this.progressAnimation.frame) return;
+    this.progressAnimation.frame = requestAnimationFrame(() =>
+      this.animateProgressFrame()
+    );
+  }
+
+  stopProgressAnimation() {
+    if (this.progressAnimation.frame) {
+      cancelAnimationFrame(this.progressAnimation.frame);
+      this.progressAnimation.frame = null;
+    }
+  }
+
+  animateProgressFrame() {
+    const state = this.progressAnimation;
+    const now = performance.now();
+    if (!state.lastFrame) {
+      state.lastFrame = now;
+    }
+    const delta = Math.min(1, (now - state.lastFrame) / 1000);
+    state.lastFrame = now;
+    const easing = 0.18 + delta * 0.2;
+
+    state.displayedPercent = this.lerp(
+      state.displayedPercent,
+      state.targetPercent,
+      easing
+    );
+    state.displayedBytes = this.lerp(
+      state.displayedBytes,
+      state.targetBytes,
+      easing
+    );
+    state.displayedSpeed = this.lerp(
+      state.displayedSpeed,
+      state.targetSpeed,
+      easing
+    );
+
+    this.updateProgressDom(state);
+
+    const percentClose =
+      Math.abs(state.displayedPercent - state.targetPercent) < 0.2;
+    const bytesClose =
+      Math.abs(state.displayedBytes - state.targetBytes) < 1024;
+    const speedClose =
+      Math.abs(state.displayedSpeed - state.targetSpeed) < 512;
+
+    if (percentClose && bytesClose && speedClose) {
+      this.stopProgressAnimation();
+    } else {
+      state.frame = requestAnimationFrame(() => this.animateProgressFrame());
+    }
+  }
+
+  updateProgressDom(state) {
+    document.getElementById("progress-filename").textContent =
+      state.fileName || "";
+
+    document.getElementById("progress-percent").textContent = `${Math.min(
+      100,
+      Math.max(0, state.displayedPercent)
+    ).toFixed(1)}%`;
+    document.getElementById("progress-fill").style.width = `${Math.min(
+      100,
+      Math.max(0, state.displayedPercent)
+    )}%`;
+
+    document.getElementById("progress-size").textContent = `${this.formatSize(
+      state.displayedBytes
+    )} / ${this.formatSize(state.totalBytes)}`;
+
+    const speedText = `${this.formatSize(Math.max(0, state.displayedSpeed))}/s`;
+    document.getElementById("progress-speed").textContent = speedText;
+
+    const remaining = Math.max(0, state.totalBytes - state.displayedBytes);
+    const etaSeconds =
+      state.displayedSpeed > 1 ? remaining / state.displayedSpeed : null;
+    const etaText = etaSeconds
+      ? this.formatEta(etaSeconds)
+      : "Tahminleniyor...";
+    document.getElementById("progress-eta").textContent = etaText;
   }
 
   // ==========================================
@@ -2064,6 +2756,77 @@ class CloudFileManager {
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  formatEta(seconds) {
+    if (!seconds || !isFinite(seconds) || seconds <= 0) {
+      return "Tahminleniyor...";
+    }
+    const totalSeconds = Math.round(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours} sa ${minutes} dk kaldı`;
+    }
+
+    if (minutes > 0) {
+      return `${minutes} dk ${secs.toString().padStart(2, "0")} sn kaldı`;
+    }
+
+    return `${secs} sn kaldı`;
+  }
+
+  lerp(start, end, factor) {
+    const clamped = Math.min(Math.max(factor, 0), 1);
+    return start + (end - start) * clamped;
+  }
+
+  initTheme() {
+    let storedTheme = null;
+    try {
+      storedTheme = localStorage.getItem(this.themeStorageKey);
+    } catch (error) {
+      storedTheme = null;
+    }
+
+    if (storedTheme === "dark" || storedTheme === "light") {
+      this.theme = storedTheme;
+    } else if (window.matchMedia) {
+      this.theme = window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+
+    this.applyTheme(this.theme);
+
+    const toggleInput = document.getElementById("theme-toggle-input");
+    if (toggleInput) {
+      toggleInput.checked = this.theme === "dark";
+      toggleInput.addEventListener("change", () =>
+        this.setTheme(toggleInput.checked ? "dark" : "light")
+      );
+    }
+  }
+
+  setTheme(theme) {
+    if (theme !== "dark" && theme !== "light") return;
+    this.theme = theme;
+    this.applyTheme(theme);
+    try {
+      localStorage.setItem(this.themeStorageKey, theme);
+    } catch (error) {
+      // storage not available
+    }
+  }
+
+  applyTheme(theme) {
+    document.body.dataset.theme = theme;
+    const toggleInput = document.getElementById("theme-toggle-input");
+    if (toggleInput) {
+      toggleInput.checked = theme === "dark";
+    }
   }
 
   // Transfer Yöneticisi

@@ -225,6 +225,19 @@ ipcMain.handle("s3-delete", async (event, { bucket, key }) => {
   }
 });
 
+ipcMain.handle(
+  "s3-generate-share-link",
+  async (event, { bucket, key, expiresIn }) => {
+    try {
+      if (!s3Service) throw new Error("S3 bağlantısı yok");
+      const url = await s3Service.generateShareLink(bucket, key, expiresIn);
+      return { success: true, url };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+);
+
 // S3 Tag işlemleri
 ipcMain.handle("s3-get-tags", async (event, { bucket, key }) => {
   try {
