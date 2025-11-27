@@ -1,4 +1,4 @@
-name: Build macOS
+name: Build Desktop
 
 on:
   push:
@@ -45,9 +45,46 @@ jobs:
           path: dist/*.zip
           if-no-files-found: ignore
 
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows app
+        run: npm run build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cloud-File-Manager-win-portable
+          path: dist/*.exe
+          if-no-files-found: warn
+
+      - name: Upload ZIP artifact (if exists)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cloud-File-Manager-win-zip
+          path: dist/*.zip
+          if-no-files-found: ignore
+
   # Release job - sadece tag push edildiğinde çalışır
   release:
-    needs: build-macos
+    needs:
+      - build-macos
+      - build-windows
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
@@ -62,6 +99,7 @@ jobs:
         with:
           files: |
             artifacts/**/*.dmg
+            artifacts/**/*.exe
             artifacts/**/*.zip
           draft: false
           prerelease: false
