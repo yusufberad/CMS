@@ -12,6 +12,7 @@ const {
   GetObjectTaggingCommand,
   PutObjectTaggingCommand,
   DeleteObjectTaggingCommand,
+  CopyObjectCommand,
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { Upload } = require("@aws-sdk/lib-storage");
@@ -243,10 +244,14 @@ class S3Service {
         Bucket: bucket,
         Key: key,
         Body: fileStream,
+        // Checksum hesaplamayı devre dışı bırak (streaming ile uyumsuz)
+        // MinIO ve bazı S3-compatible servislerde sorun çıkarabiliyor
       },
       queueSize: queueSize, // Dinamik paralel upload
       partSize: partSize,
       leavePartsOnError: false, // Hata durumunda temizle
+      // Checksum hesaplamayı devre dışı bırak
+      requestChecksumCalculation: false,
     });
 
     console.log(
@@ -403,6 +408,33 @@ class S3Service {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
       Key: key,
+    });
+
+    await this.client.send(command);
+  }
+
+  async mkdir(bucket, key) {
+    // S3'te klasör kavramı yok, ancak "folder marker" objesi oluşturabiliriz
+    // Key'in sonuna "/" ekleyerek boş bir obje oluştururuz
+    const folderKey = key.endsWith("/") ? key : `${key}/`;
+
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: folderKey,
+      Body: "", // Boş içerik
+    });
+
+    await this.client.send(command);
+  }
+
+  async copyObject(sourceBucket, sourceKey, destBucket, destKey) {
+    // S3'te move işlemi yok, copy + delete yapılır
+    const copySource = `${sourceBucket}/${sourceKey}`;
+
+    const command = new CopyObjectCommand({
+      Bucket: destBucket,
+      CopySource: copySource,
+      Key: destKey,
     });
 
     await this.client.send(command);

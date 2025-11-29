@@ -214,10 +214,13 @@ class S3StreamUploader {
         Bucket: bucket,
         Key: key,
         Body: stream,
+        // Checksum hesaplamayı devre dışı bırak (streaming ile uyumsuz)
       },
       queueSize,
       partSize,
       leavePartsOnError: false,
+      // Checksum hesaplamayı devre dışı bırak
+      requestChecksumCalculation: false,
     });
 
     // Upload bilgilerini kaydet

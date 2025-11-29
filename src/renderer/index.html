@@ -14,20 +14,7 @@
     <!-- Titlebar -->
     <div class="titlebar">
       <div class="titlebar-drag">
-        <div class="app-logo">
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
-            <path d="M22 10a4.5 4.5 0 0 0-4.5-4.5" />
-          </svg>
-          <span>Heysem Cloud Manager</span>
-        </div>
+        <div class="app-title">Heysem Cloud Manager</div>
       </div>
       <div class="titlebar-controls">
         <button class="titlebar-btn minimize" id="titlebar-minimize">
@@ -245,6 +232,26 @@
             </button>
             <button
               class="toolbar-btn"
+              id="btn-new-folder"
+              title="Yeni Klasör"
+              disabled
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path
+                  d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+                />
+              </svg>
+              <span>Yeni Klasör</span>
+            </button>
+            <button
+              class="toolbar-btn"
               id="btn-tags"
               title="Tag Yönet (S3)"
               disabled
@@ -344,6 +351,24 @@
                 placeholder="Dosyalar içinde ara..."
                 autocomplete="off"
               />
+              <button
+                class="search-clear"
+                id="search-clear-btn"
+                title="Temizle"
+                style="display: none"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
             </div>
             <label class="theme-switch" aria-label="Tema değiştir">
               <input type="checkbox" id="theme-toggle-input" />
@@ -476,6 +501,44 @@
             <span id="progress-size">0 KB / 0 KB</span>
             <span id="progress-speed">0 KB/s</span>
             <span id="progress-eta">Tahminleniyor...</span>
+          </div>
+          <div class="progress-actions">
+            <button
+              class="btn-progress btn-pause"
+              id="btn-pause-upload"
+              title="Durdur"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
+              </svg>
+              <span>Durdur</span>
+            </button>
+            <button
+              class="btn-progress btn-cancel"
+              id="btn-cancel-upload"
+              title="İptal Et"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+              <span>İptal Et</span>
+            </button>
           </div>
         </div>
       </main>

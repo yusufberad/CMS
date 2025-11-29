@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   s3Upload: (data) => ipcRenderer.invoke("s3-upload", data),
   s3Download: (data) => ipcRenderer.invoke("s3-download", data),
   s3Delete: (data) => ipcRenderer.invoke("s3-delete", data),
+  s3Mkdir: (data) => ipcRenderer.invoke("s3-mkdir", data),
+  s3Move: (data) => ipcRenderer.invoke("s3-move", data),
+  ftpMove: (data) => ipcRenderer.invoke("ftp-move", data),
   s3GenerateShareLink: (data) =>
     ipcRenderer.invoke("s3-generate-share-link", data),
   s3GetTags: (data) => ipcRenderer.invoke("s3-get-tags", data),

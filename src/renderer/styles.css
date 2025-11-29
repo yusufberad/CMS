@@ -94,16 +94,20 @@ body {
 
 .titlebar-drag {
   flex: 1;
-  padding-left: 16px;
-}
-
-.app-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--primary);
+  justify-content: center;
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.app-title {
+  color: var(--text-primary);
   font-weight: 600;
   font-size: 13px;
+  pointer-events: none;
 }
 
 .titlebar-controls {
@@ -1062,6 +1066,32 @@ body {
   color: var(--text-muted);
 }
 
+.search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.search-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.search-clear svg {
+  width: 14px;
+  height: 14px;
+}
+
 .toolbar-btn {
   display: flex;
   align-items: center;
@@ -1307,6 +1337,25 @@ body {
   border: 1px solid var(--primary);
 }
 
+.file-item.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.file-item[data-type="directory"].drag-over {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: var(--primary);
+  border-style: dashed;
+}
+
+.file-item[data-type="file"] {
+  cursor: grab;
+}
+
+.file-item[data-type="file"]:active {
+  cursor: grabbing;
+}
+
 .file-name {
   display: flex;
   align-items: center;
@@ -1497,6 +1546,56 @@ body {
 #progress-speed {
   color: var(--primary);
   font-weight: 600;
+}
+
+.progress-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.btn-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-primary);
+}
+
+.btn-progress:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--primary);
+}
+
+.btn-progress.btn-pause:hover {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: #fbbf24;
+  color: #fbbf24;
+}
+
+.btn-progress.btn-cancel:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.btn-progress svg {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-progress:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ============================================

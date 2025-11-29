@@ -225,6 +225,38 @@ ipcMain.handle("s3-delete", async (event, { bucket, key }) => {
   }
 });
 
+ipcMain.handle("s3-mkdir", async (event, { bucket, key }) => {
+  try {
+    if (!s3Service) throw new Error("S3 bağlantısı yok");
+    await s3Service.mkdir(bucket, key);
+    return { success: true, message: "Klasör oluşturuldu!" };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle("s3-move", async (event, { bucket, sourceKey, destKey }) => {
+  try {
+    if (!s3Service) throw new Error("S3 bağlantısı yok");
+    // S3'te move = copy + delete
+    await s3Service.copyObject(bucket, sourceKey, bucket, destKey);
+    await s3Service.delete(bucket, sourceKey);
+    return { success: true, message: "Dosya taşındı!" };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle("ftp-move", async (event, { sourcePath, destPath }) => {
+  try {
+    if (!ftpService) throw new Error("FTP bağlantısı yok");
+    await ftpService.rename(sourcePath, destPath);
+    return { success: true, message: "Dosya taşındı!" };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
 ipcMain.handle(
   "s3-generate-share-link",
   async (event, { bucket, key, expiresIn }) => {
@@ -298,6 +330,67 @@ ipcMain.handle("get-file-info", async (event, filePath) => {
   }
 });
 
+// Resim formatını magic bytes ile tespit et
+function detectImageMimeType(buffer, fileName) {
+  if (!buffer || buffer.length < 4) {
+    return null;
+  }
+
+  // Magic bytes ile format tespiti
+  const header = buffer.slice(0, 12);
+  
+  // JPEG: FF D8 FF
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
+    return "image/jpeg";
+  }
+  
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e && header[3] === 0x47) {
+    return "image/png";
+  }
+  
+  // GIF: 47 49 46 38 (GIF8)
+  if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x38) {
+    return "image/gif";
+  }
+  
+  // BMP: 42 4D (BM)
+  if (header[0] === 0x42 && header[1] === 0x4d) {
+    return "image/bmp";
+  }
+  
+  // WebP: RIFF...WEBP
+  if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) {
+    const webpHeader = buffer.slice(8, 12);
+    if (webpHeader[0] === 0x57 && webpHeader[1] === 0x45 && webpHeader[2] === 0x42 && webpHeader[3] === 0x50) {
+      return "image/webp";
+    }
+  }
+  
+  // SVG: XML formatında başlar (<svg veya <?xml)
+  const textStart = buffer.slice(0, Math.min(100, buffer.length)).toString("utf-8").trim();
+  if (textStart.startsWith("<?xml") || textStart.startsWith("<svg")) {
+    return "image/svg+xml";
+  }
+  
+  // Eğer magic bytes ile tespit edilemezse, uzantıya bak
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeTypes = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+  };
+  
+  return mimeTypes[ext] || null;
+}
+
 // Resim önizleme için geçici indirme
 ipcMain.handle(
   "get-image-preview",
@@ -343,8 +436,17 @@ ipcMain.handle(
         throw new Error("İndirilen dosya boş");
       }
 
+      // Dosya formatını magic bytes ile tespit et
+      const fileBuffer = fs.readFileSync(tempPath);
+      const mimeType = detectImageMimeType(fileBuffer, fileName);
+      
+      if (!mimeType) {
+        fs.unlinkSync(tempPath);
+        throw new Error("Dosya formatı desteklenmiyor. Desteklenen formatlar: JPEG, PNG, GIF, WebP, BMP, SVG");
+      }
+
       // Dosyayı base64 olarak oku
-      const imageData = fs.readFileSync(tempPath, { encoding: "base64" });
+      const imageData = fileBuffer.toString("base64");
 
       // Geçici dosyayı sil
       try {
@@ -352,19 +454,6 @@ ipcMain.handle(
       } catch (e) {
         console.warn("Temp file cleanup failed:", e.message);
       }
-
-      // MIME type belirle
-      const ext = path.extname(fileName).toLowerCase();
-      const mimeTypes = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".bmp": "image/bmp",
-      };
-      const mimeType = mimeTypes[ext] || "image/jpeg";
 
       console.log("Preview success:", fileName, mimeType);
 

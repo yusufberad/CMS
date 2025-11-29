@@ -54,6 +54,11 @@ class CloudFileManager {
     this.activeActionMenu = null;
     this.boundActionMenuOutsideClick =
       this.handleActionMenuOutsideClick.bind(this);
+    this.currentVideoIndex = -1;
+    this.videoFiles = [];
+    this.boundVideoNavigation = this.handleVideoNavigation.bind(this);
+    this.activeUploads = new Map(); // Aktif upload'ları takip et
+    this.isUploadPaused = false; // Upload durduruldu mu?
 
     this.init();
   }
@@ -122,10 +127,34 @@ class CloudFileManager {
       .addEventListener("click", () => this.showSharedLinkModal());
 
     const searchInput = document.getElementById("file-search-input");
+    const searchClearBtn = document.getElementById("search-clear-btn");
     if (searchInput) {
-      searchInput.addEventListener("input", (event) =>
-        this.handleSearchInput(event.target.value)
-      );
+      searchInput.addEventListener("input", (event) => {
+        this.handleSearchInput(event.target.value);
+        // Clear butonunu göster/gizle
+        if (searchClearBtn) {
+          searchClearBtn.style.display = event.target.value ? "flex" : "none";
+        }
+      });
+    }
+    if (searchClearBtn) {
+      searchClearBtn.addEventListener("click", () => {
+        if (searchInput) {
+          searchInput.value = "";
+          this.handleSearchInput("");
+          searchClearBtn.style.display = "none";
+        }
+      });
+    }
+
+    // Progress butonları
+    const pauseBtn = document.getElementById("btn-pause-upload");
+    const cancelBtn = document.getElementById("btn-cancel-upload");
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", () => this.pauseUpload());
+    }
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", () => this.cancelUpload());
     }
 
     // Bucket seçimi
@@ -511,7 +540,9 @@ class CloudFileManager {
         (file, index) => `
       <div class="file-item" data-name="${file.name}" data-type="${
           file.type
-        }" data-key="${file.key || ""}" style="animation-delay: ${
+        }" data-key="${file.key || ""}" ${
+          file.type !== "directory" ? 'draggable="true"' : ""
+        } style="animation-delay: ${
           index * 0.02
         }s">
         <div class="file-name">
@@ -581,10 +612,158 @@ class CloudFileManager {
     // Dosya seçimi olayları
     container.querySelectorAll(".file-item").forEach((item) => {
       item.addEventListener("click", (e) => this.selectFile(item));
+      
+      // Drag events for files (not directories)
+      if (item.dataset.type !== "directory") {
+        item.addEventListener("dragstart", (e) => this.handleDragStart(e, item));
+      }
+      
+      // Drop events for directories
+      if (item.dataset.type === "directory") {
+        item.addEventListener("dragover", (e) => this.handleDragOver(e, item));
+        item.addEventListener("dragleave", (e) => this.handleDragLeave(e, item));
+        item.addEventListener("drop", (e) => this.handleDrop(e, item));
+      }
     });
 
     this.bindFileActions(container);
     this.updateSortIndicators();
+  }
+
+  handleDragStart(e, fileItem) {
+    // Sadece bağlıyken ve dosya ise
+    if (!this.isConnected || fileItem.dataset.type === "directory") {
+      e.preventDefault();
+      return;
+    }
+    
+    const fileName = fileItem.dataset.name;
+    const fileKey = fileItem.dataset.key;
+    
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", JSON.stringify({
+      fileName,
+      fileKey,
+      type: "file",
+      connectionType: this.connectionType
+    }));
+    
+    fileItem.classList.add("dragging");
+  }
+
+  handleDragOver(e, folderItem) {
+    // Bağlı değilse veya dosya sürüklenmiyorsa
+    if (!this.isConnected) return;
+    
+    // Dosya sürükleniyor mu kontrol et
+    const dragData = e.dataTransfer.getData("text/plain");
+    if (!dragData) {
+      // dataTransfer.getData sadece drop event'inde çalışır, bu yüzden types kontrolü yapalım
+      if (!e.dataTransfer.types.includes("text/plain")) return;
+    }
+    
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    
+    folderItem.classList.add("drag-over");
+  }
+
+  handleDragLeave(e, folderItem) {
+    folderItem.classList.remove("drag-over");
+  }
+
+  async handleDrop(e, folderItem) {
+    if (!this.isConnected) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    folderItem.classList.remove("drag-over");
+    
+    try {
+      const dragData = e.dataTransfer.getData("text/plain");
+      if (!dragData) return;
+      
+      const data = JSON.parse(dragData);
+      if (data.type !== "file") return;
+      
+      const sourceFileName = data.fileName;
+      const destFolderName = folderItem.dataset.name;
+      
+      if (this.connectionType === "s3") {
+        // S3 için
+        if (!data.fileKey) return;
+        
+        const sourceKey = data.fileKey;
+        
+        // Hedef klasör path'ini oluştur
+        let destKey;
+        if (this.currentPath) {
+          destKey = `${this.currentPath}${destFolderName}/${sourceFileName}`;
+        } else {
+          destKey = `${destFolderName}/${sourceFileName}`;
+        }
+        
+        // Aynı yere taşıma kontrolü
+        if (sourceKey === destKey) {
+          this.showToast("Dosya zaten bu klasörde", "info");
+          return;
+        }
+        
+        // Move işlemi
+        this.showToast("Dosya taşınıyor...", "info");
+        const result = await window.electronAPI.s3Move({
+          bucket: this.currentBucket,
+          sourceKey: sourceKey,
+          destKey: destKey,
+        });
+        
+        if (result.success) {
+          this.showToast(`${sourceFileName} taşındı!`, "success");
+          this.refreshFileList();
+        } else {
+          this.showToast(result.message, "error");
+        }
+      } else if (this.connectionType === "ftp") {
+        // FTP için
+        const sourcePath = this.currentPath === "/"
+          ? `/${sourceFileName}`
+          : `${this.currentPath}/${sourceFileName}`;
+        
+        const destPath = this.currentPath === "/"
+          ? `/${destFolderName}/${sourceFileName}`
+          : `${this.currentPath}/${destFolderName}/${sourceFileName}`;
+        
+        // Aynı yere taşıma kontrolü
+        if (sourcePath === destPath) {
+          this.showToast("Dosya zaten bu klasörde", "info");
+          return;
+        }
+        
+        // Move işlemi
+        this.showToast("Dosya taşınıyor...", "info");
+        const result = await window.electronAPI.ftpMove({
+          sourcePath: sourcePath,
+          destPath: destPath,
+        });
+        
+        if (result.success) {
+          this.showToast(`${sourceFileName} taşındı!`, "success");
+          this.refreshFileList();
+        } else {
+          this.showToast(result.message, "error");
+        }
+      }
+    } catch (error) {
+      console.error("Drop error:", error);
+      this.showToast(`Taşıma hatası: ${error.message}`, "error");
+    }
+    
+    // Dragging class'ını temizle
+    document.querySelectorAll(".file-item.dragging").forEach((item) => {
+      item.classList.remove("dragging");
+    });
   }
 
   getFilteredAndSortedFiles() {
@@ -639,6 +818,13 @@ class CloudFileManager {
   handleSearchInput(value) {
     this.searchQuery = value ?? "";
     this.renderFileList();
+    
+    // Clear butonunu göster/gizle
+    const searchClearBtn = document.getElementById("search-clear-btn");
+    const searchInput = document.getElementById("file-search-input");
+    if (searchClearBtn && searchInput) {
+      searchClearBtn.style.display = value ? "flex" : "none";
+    }
   }
 
   handleSortInteraction(sortKey) {
@@ -1388,6 +1574,11 @@ class CloudFileManager {
       }
     }
 
+    // Klavye event listener'ını kaldır
+    document.removeEventListener("keydown", this.boundVideoNavigation);
+    this.currentVideoIndex = -1;
+    this.videoFiles = [];
+
     this.resetSharedPreview();
 
     document.querySelectorAll(".modal").forEach((modal) => {
@@ -1420,9 +1611,23 @@ class CloudFileManager {
           this.showToast(result.message, "error");
         }
       } else {
-        // S3'te klasör kavramı yok, boş bir obje oluşturuyoruz
-        this.showToast("S3'te klasörler otomatik olarak oluşturulur", "info");
-        this.closeModals();
+        // S3 için klasör oluştur (folder marker objesi)
+        const key = this.currentPath
+          ? `${this.currentPath}${folderName}/`
+          : `${folderName}/`;
+
+        const result = await window.electronAPI.s3Mkdir({
+          bucket: this.currentBucket,
+          key: key,
+        });
+
+        if (result.success) {
+          this.showToast("Klasör oluşturuldu!", "success");
+          this.closeModals();
+          this.refreshFileList();
+        } else {
+          this.showToast(result.message, "error");
+        }
       }
     } catch (error) {
       this.showToast(`Klasör oluşturma hatası: ${error.message}`, "error");
@@ -1674,7 +1879,63 @@ class CloudFileManager {
       document.getElementById("progress-fill").style.width = "0%";
       this.resetSpeedCalculation();
       this.resetProgressAnimation();
+      this.isUploadPaused = false;
     }, 500);
+  }
+
+  pauseUpload() {
+    if (this.isUploadPaused) {
+      // Devam et
+      this.isUploadPaused = false;
+      const pauseBtn = document.getElementById("btn-pause-upload");
+      if (pauseBtn) {
+        pauseBtn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+          </svg>
+          <span>Durdur</span>
+        `;
+        pauseBtn.title = "Durdur";
+      }
+      this.showToast("Yükleme devam ediyor...", "info");
+      // Not: Gerçek pause/resume implementasyonu için backend desteği gerekir
+    } else {
+      // Durdur
+      this.isUploadPaused = true;
+      const pauseBtn = document.getElementById("btn-pause-upload");
+      if (pauseBtn) {
+        pauseBtn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          <span>Devam Et</span>
+        `;
+        pauseBtn.title = "Devam Et";
+      }
+      this.showToast("Yükleme durduruldu", "info");
+      // Not: Gerçek pause implementasyonu için backend desteği gerekir
+    }
+  }
+
+  cancelUpload() {
+    if (confirm("Yükleme iptal edilsin mi? İlerleme kaybolacak.")) {
+      // Aktif upload'ları iptal et
+      this.activeUploads.clear();
+      this.isUploadPaused = false;
+      this.hideProgress();
+      this.showToast("Yükleme iptal edildi", "info");
+      
+      // Transfer kayıtlarını güncelle
+      this.transfers.active.forEach((transfer) => {
+        if (transfer.type === "upload") {
+          this.completeTransfer(transfer.fileName, false, "İptal edildi");
+        }
+      });
+      
+      // Not: Gerçek cancel implementasyonu için backend desteği gerekir
+      // IPC ile main process'e cancel sinyali gönderilmeli
+    }
   }
 
   updateProgress(progress, type) {
@@ -2095,9 +2356,11 @@ class CloudFileManager {
 
         img.onerror = (e) => {
           console.error("Image load error:", e);
+          console.error("MIME Type:", result.mimeType);
+          console.error("File Name:", fileName);
           loader.style.display = "none";
           this.showToast(
-            "Resim formatı desteklenmiyor veya dosya bozuk",
+            `Resim yüklenemedi: ${fileName}. Format desteklenmiyor veya dosya bozuk olabilir.`,
             "error"
           );
           setTimeout(() => this.closeModals(), 2000);
@@ -2122,6 +2385,18 @@ class CloudFileManager {
     const modal = document.getElementById("modal-video-preview");
     const video = document.getElementById("preview-video");
     const loader = modal.querySelector(".video-loader");
+
+    // Video dosyalarını filtrele ve index'i bul
+    this.videoFiles = this.getFilteredAndSortedFiles().filter((file) =>
+      this.isVideoFile(file.name)
+    );
+    this.currentVideoIndex = this.videoFiles.findIndex(
+      (file) => file.name === fileName
+    );
+
+    // Klavye event listener'ını ekle (önce kaldır, sonra ekle - duplicate önlemek için)
+    document.removeEventListener("keydown", this.boundVideoNavigation);
+    document.addEventListener("keydown", this.boundVideoNavigation);
 
     // DEBUG: Başlangıç zamanı
     const debugStart = Date.now();
@@ -2307,6 +2582,67 @@ class CloudFileManager {
       loader.style.display = "none";
       this.showToast(`Video önizleme hatası: ${error.message}`, "error");
       setTimeout(() => this.closeModals(), 2000);
+    }
+  }
+
+  handleVideoNavigation(event) {
+    // Sadece video modal açıkken çalışsın
+    const modal = document.getElementById("modal-video-preview");
+    if (!modal || modal.classList.contains("hidden")) {
+      return;
+    }
+
+    // Input alanlarında yazı yazılırken çalışmasın
+    if (
+      event.target.tagName === "INPUT" ||
+      event.target.tagName === "TEXTAREA" ||
+      event.target.isContentEditable
+    ) {
+      return;
+    }
+
+    // Ok tuşları ile gezinme
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+
+      if (this.videoFiles.length === 0) {
+        return;
+      }
+
+      let newIndex;
+      if (event.key === "ArrowDown") {
+        // Bir sonraki video
+        newIndex = (this.currentVideoIndex + 1) % this.videoFiles.length;
+      } else {
+        // Bir önceki video
+        newIndex =
+          this.currentVideoIndex <= 0
+            ? this.videoFiles.length - 1
+            : this.currentVideoIndex - 1;
+      }
+
+      const nextVideo = this.videoFiles[newIndex];
+      if (!nextVideo) {
+        return;
+      }
+
+      // Dosya listesinden ilgili fileItem'ı bul
+      const fileList = document.getElementById("file-list");
+      const fileItems = fileList.querySelectorAll(".file-item");
+      let targetFileItem = null;
+
+      for (const item of fileItems) {
+        if (item.dataset.name === nextVideo.name) {
+          targetFileItem = item;
+          break;
+        }
+      }
+
+      if (targetFileItem) {
+        // Yeni videoyu aç
+        this.currentVideoIndex = newIndex;
+        this.showVideoPreview(targetFileItem);
+      }
     }
   }
 
@@ -2921,7 +3257,7 @@ class CloudFileManager {
     }
   }
 
-  completeTransfer(fileName, success = true) {
+  completeTransfer(fileName, success = true, message = null) {
     const index = this.transfers.active.findIndex(
       (t) => t.fileName === fileName
     );
