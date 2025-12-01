@@ -162,6 +162,40 @@ class S3Service {
     return items;
   }
 
+  // Belirli bir klasör/prefix altındaki tüm nesnelerin toplam boyutunu hesapla
+  async getFolderSize(bucket, prefix = "") {
+    let totalSize = 0;
+    let continuationToken = undefined;
+
+    // Prefix sonu her zaman "/" ile bitsin (klasör mantığı)
+    const normalizedPrefix =
+      prefix && !prefix.endsWith("/") ? `${prefix}/` : prefix || "";
+
+    do {
+      const command = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: normalizedPrefix,
+        ContinuationToken: continuationToken,
+      });
+
+      const response = await this.client.send(command);
+
+      if (response.Contents) {
+        for (const object of response.Contents) {
+          // Klasörün kendisi (sadece prefix) ise atla
+          if (object.Key === normalizedPrefix) continue;
+          totalSize += object.Size || 0;
+        }
+      }
+
+      continuationToken = response.IsTruncated
+        ? response.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+
+    return totalSize;
+  }
+
   async upload(localPath, bucket, key, onProgress) {
     const uploadStartTime = Date.now();
 

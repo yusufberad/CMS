@@ -62,27 +62,35 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "icon": "assets/icon.ico",
+      "icon": "src/assets/favicon.ico",
       "signAndEditExecutable": false
     },
     "mac": {
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
-      "icon": "assets/icon.icns",
+      "icon": "src/assets/apple-touch-icon.png",
       "category": "public.app-category.utilities"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "assets/icon.png",
+      "icon": "src/assets/android-chrome-512x512.png",
       "category": "Utility"
     },
-    "electronLanguages": ["en", "tr"]
+    "electronLanguages": [
+      "en",
+      "tr"
+    ]
   }
 }

@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  protocol,
+  nativeImage,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 const FTPService = require("./services/ftp-service");
@@ -12,6 +19,32 @@ let videoStreamServer = null;
 let currentVideoPath = null;
 let videoDownloadProgress = new Map(); // track download progress
 let activeStreams = new Map(); // track active video streams
+let cachedAppIcon = null;
+
+function loadAppIcon() {
+  if (cachedAppIcon) return cachedAppIcon;
+  try {
+    // Windows için .ico, diğer platformlar için PNG setini kullan
+    const iconFilename =
+      process.platform === "win32"
+        ? "favicon.ico"
+        : "android-chrome-512x512.png";
+
+    const iconPath = path.join(__dirname, "assets", iconFilename);
+    cachedAppIcon = nativeImage
+      .createFromPath(iconPath)
+      .resize({ width: 256, height: 256 });
+
+    if (cachedAppIcon.isEmpty()) {
+      throw new Error("NativeImage is empty");
+    }
+
+    return cachedAppIcon;
+  } catch (error) {
+    console.warn("App icon could not be loaded:", error.message);
+    return null;
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -22,6 +55,7 @@ function createWindow() {
     backgroundColor: "#0a0a0f",
     titleBarStyle: "hiddenInset",
     frame: false,
+    icon: loadAppIcon() || undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -96,6 +130,16 @@ ipcMain.handle("ftp-list", async (event, remotePath) => {
     if (!ftpService) throw new Error("FTP bağlantısı yok");
     const files = await ftpService.list(remotePath);
     return { success: true, files };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle("ftp-get-folder-size", async (event, remotePath) => {
+  try {
+    if (!ftpService) throw new Error("FTP bağlantısı yok");
+    const size = await ftpService.getFolderSize(remotePath);
+    return { success: true, size };
   } catch (error) {
     return { success: false, message: error.message };
   }
@@ -186,6 +230,16 @@ ipcMain.handle("s3-list", async (event, { bucket, prefix }) => {
     if (!s3Service) throw new Error("S3 bağlantısı yok");
     const files = await s3Service.listObjects(bucket, prefix);
     return { success: true, files };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle("s3-get-folder-size", async (event, { bucket, prefix }) => {
+  try {
+    if (!s3Service) throw new Error("S3 bağlantısı yok");
+    const size = await s3Service.getFolderSize(bucket, prefix);
+    return { success: true, size };
   } catch (error) {
     return { success: false, message: error.message };
   }
@@ -338,41 +392,64 @@ function detectImageMimeType(buffer, fileName) {
 
   // Magic bytes ile format tespiti
   const header = buffer.slice(0, 12);
-  
+
   // JPEG: FF D8 FF
   if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
     return "image/jpeg";
   }
-  
+
   // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e && header[3] === 0x47) {
+  if (
+    header[0] === 0x89 &&
+    header[1] === 0x50 &&
+    header[2] === 0x4e &&
+    header[3] === 0x47
+  ) {
     return "image/png";
   }
-  
+
   // GIF: 47 49 46 38 (GIF8)
-  if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x38) {
+  if (
+    header[0] === 0x47 &&
+    header[1] === 0x49 &&
+    header[2] === 0x46 &&
+    header[3] === 0x38
+  ) {
     return "image/gif";
   }
-  
+
   // BMP: 42 4D (BM)
   if (header[0] === 0x42 && header[1] === 0x4d) {
     return "image/bmp";
   }
-  
+
   // WebP: RIFF...WEBP
-  if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) {
+  if (
+    header[0] === 0x52 &&
+    header[1] === 0x49 &&
+    header[2] === 0x46 &&
+    header[3] === 0x46
+  ) {
     const webpHeader = buffer.slice(8, 12);
-    if (webpHeader[0] === 0x57 && webpHeader[1] === 0x45 && webpHeader[2] === 0x42 && webpHeader[3] === 0x50) {
+    if (
+      webpHeader[0] === 0x57 &&
+      webpHeader[1] === 0x45 &&
+      webpHeader[2] === 0x42 &&
+      webpHeader[3] === 0x50
+    ) {
       return "image/webp";
     }
   }
-  
+
   // SVG: XML formatında başlar (<svg veya <?xml)
-  const textStart = buffer.slice(0, Math.min(100, buffer.length)).toString("utf-8").trim();
+  const textStart = buffer
+    .slice(0, Math.min(100, buffer.length))
+    .toString("utf-8")
+    .trim();
   if (textStart.startsWith("<?xml") || textStart.startsWith("<svg")) {
     return "image/svg+xml";
   }
-  
+
   // Eğer magic bytes ile tespit edilemezse, uzantıya bak
   const ext = path.extname(fileName).toLowerCase();
   const mimeTypes = {
@@ -387,7 +464,7 @@ function detectImageMimeType(buffer, fileName) {
     ".tiff": "image/tiff",
     ".tif": "image/tiff",
   };
-  
+
   return mimeTypes[ext] || null;
 }
 
@@ -439,10 +516,12 @@ ipcMain.handle(
       // Dosya formatını magic bytes ile tespit et
       const fileBuffer = fs.readFileSync(tempPath);
       const mimeType = detectImageMimeType(fileBuffer, fileName);
-      
+
       if (!mimeType) {
         fs.unlinkSync(tempPath);
-        throw new Error("Dosya formatı desteklenmiyor. Desteklenen formatlar: JPEG, PNG, GIF, WebP, BMP, SVG");
+        throw new Error(
+          "Dosya formatı desteklenmiyor. Desteklenen formatlar: JPEG, PNG, GIF, WebP, BMP, SVG"
+        );
       }
 
       // Dosyayı base64 olarak oku
@@ -474,10 +553,11 @@ ipcMain.handle(
   "get-video-preview",
   async (event, { type, remotePath, bucket, key }) => {
     const debugStart = Date.now();
-    const debugLog = (stage) => console.log(`[VIDEO-MAIN] ${stage} +${Date.now() - debugStart}ms`);
-    
+    const debugLog = (stage) =>
+      console.log(`[VIDEO-MAIN] ${stage} +${Date.now() - debugStart}ms`);
+
     try {
-      debugLog('IPC_BAŞLADI');
+      debugLog("IPC_BAŞLADI");
       console.log("Video preview request:", { type, remotePath, bucket, key });
 
       const fileName =
@@ -504,9 +584,9 @@ ipcMain.handle(
         // S3 için pre-signed URL kullan (en hızlı yöntem)
         if (!s3Service) throw new Error("S3 bağlantısı yok");
 
-        debugLog('S3_PRESIGNED_URL_OLUŞTURULUYOR');
+        debugLog("S3_PRESIGNED_URL_OLUŞTURULUYOR");
         const signedUrl = await s3Service.getSignedUrl(bucket, key, 3600); // 1 saat geçerli
-        debugLog('S3_PRESIGNED_URL_HAZIR');
+        debugLog("S3_PRESIGNED_URL_HAZIR");
 
         return {
           success: true,

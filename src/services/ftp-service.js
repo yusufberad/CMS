@@ -36,7 +36,36 @@ class FTPService {
       size: file.size,
       modifiedAt: file.modifiedAt || file.rawModifiedAt,
       permissions: file.permissions || {},
+      // FTP list sonuçlarında klasör boyutu genelde gelmez, bu yüzden 0 bırakıyoruz.
+      // İleride istenirse recursive hesaplama ile güncellenebilir.
+      isDirectory: file.type === 2,
     }));
+  }
+
+  // Klasör boyutunu recursive olarak hesapla
+  async getFolderSize(remotePath = "/") {
+    const normalizedPath =
+      !remotePath || remotePath === "" ? "/" : remotePath;
+
+    const entries = await this.client.list(normalizedPath);
+    let totalSize = 0;
+
+    for (const entry of entries) {
+      const entryPath =
+        normalizedPath === "/"
+          ? `/${entry.name}`
+          : `${normalizedPath.replace(/\/$/, "")}/${entry.name}`;
+
+      if (entry.type === 2) {
+        // Klasör
+        totalSize += await this.getFolderSize(entryPath);
+      } else {
+        // Dosya
+        totalSize += entry.size || 0;
+      }
+    }
+
+    return totalSize;
   }
 
   async upload(localPath, remotePath, onProgress) {

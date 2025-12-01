@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   ftpConnect: (config) => ipcRenderer.invoke("ftp-connect", config),
   ftpDisconnect: () => ipcRenderer.invoke("ftp-disconnect"),
   ftpList: (remotePath) => ipcRenderer.invoke("ftp-list", remotePath),
+  ftpGetFolderSize: (remotePath) =>
+    ipcRenderer.invoke("ftp-get-folder-size", remotePath),
   ftpUpload: (data) => ipcRenderer.invoke("ftp-upload", data),
   ftpDownload: (data) => ipcRenderer.invoke("ftp-download", data),
   ftpDelete: (remotePath) => ipcRenderer.invoke("ftp-delete", remotePath),
@@ -22,6 +24,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   s3CreateBucket: (bucketName) =>
     ipcRenderer.invoke("s3-create-bucket", bucketName),
   s3List: (data) => ipcRenderer.invoke("s3-list", data),
+  s3GetFolderSize: (data) =>
+    ipcRenderer.invoke("s3-get-folder-size", data),
   s3Upload: (data) => ipcRenderer.invoke("s3-upload", data),
   s3Download: (data) => ipcRenderer.invoke("s3-download", data),
   s3Delete: (data) => ipcRenderer.invoke("s3-delete", data),

@@ -36,6 +36,7 @@ class CloudFileManager {
       fileName: "",
       etaText: "Tahminleniyor...",
     };
+    this.lastPreviewImageUrl = null;
     this.platform =
       (window.electronAPI && window.electronAPI.getPlatform
         ? window.electronAPI.getPlatform()
@@ -61,6 +62,63 @@ class CloudFileManager {
     this.isUploadPaused = false; // Upload durduruldu mu?
 
     this.init();
+  }
+
+  /**
+   * Arama için Türkçe karakterleri sadeleştiren helper.
+   * Örn: "ç, ğ, ı, ö, ş, ü" -> "c, g, i, o, s, u"
+   * Böylece hem Türkçe hem İngilizce karakterle yazılan sorgular eşleşir.
+   */
+  normalizeSearchText(text) {
+    if (!text) return "";
+    const map = {
+      ç: "c",
+      Ç: "c",
+      ğ: "g",
+      Ğ: "g",
+      ı: "i",
+      I: "i",
+      İ: "i",
+      ö: "o",
+      Ö: "o",
+      ş: "s",
+      Ş: "s",
+      ü: "u",
+      Ü: "u",
+    };
+    return text
+      .split("")
+      .map((ch) => map[ch] || ch)
+      .join("")
+      .toLowerCase();
+  }
+
+  /**
+   * Base64 resmi Blob'a çevirip URL.createObjectURL ile kullanılabilir hale getirir.
+   * Data URL yerine Blob URL kullanmak bazı tarayıcı/electron sorunlarını azaltır.
+   */
+  base64ToImageUrl(base64Data, mimeType) {
+    try {
+      const binaryString = atob(base64Data);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType || "image/jpeg" });
+
+      // Eski URL'i temizle
+      if (this.lastPreviewImageUrl) {
+        URL.revokeObjectURL(this.lastPreviewImageUrl);
+      }
+
+      const url = URL.createObjectURL(blob);
+      this.lastPreviewImageUrl = url;
+      return url;
+    } catch (error) {
+      console.error("base64ToImageUrl error:", error);
+      return null;
+    }
   }
 
   init() {
@@ -315,6 +373,37 @@ class CloudFileManager {
         }
       }
     });
+
+    // Klavye kısayolları: Space ile önizleme
+    document.addEventListener("keydown", (event) => {
+      // Sadece boşluk tuşu, input/textarea vs. içinde değilken çalışsın
+      if (event.key === " " || event.code === "Space") {
+        const activeTag = document.activeElement?.tagName;
+        if (
+          activeTag &&
+          ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag.toUpperCase())
+        ) {
+          return;
+        }
+
+        // Seçili dosyayı bul
+        const selectedItem = document.querySelector(".file-item.selected");
+        if (!selectedItem) return;
+
+        const fileName = selectedItem.dataset.name;
+        const fileType = selectedItem.dataset.type;
+
+        // Sadece dosyalar için önizleme
+        if (fileType !== "directory") {
+          event.preventDefault();
+          if (this.isImageFile(fileName)) {
+            this.showImagePreview(selectedItem);
+          } else if (this.isVideoFile(fileName)) {
+            this.showVideoPreview(selectedItem);
+          }
+        }
+      }
+    });
   }
 
   setupProgressListeners() {
@@ -484,6 +573,7 @@ class CloudFileManager {
       if (result.success) {
         this.files = result.files;
         this.renderFileList();
+        this.updateFolderSizes();
         this.updateBreadcrumb();
       } else {
         this.showToast(result.message, "error");
@@ -505,6 +595,7 @@ class CloudFileManager {
       if (result.success) {
         this.files = result.files;
         this.renderFileList();
+        this.updateFolderSizes();
         this.updateBreadcrumb();
       } else {
         this.showToast(result.message, "error");
@@ -565,7 +656,7 @@ class CloudFileManager {
           <span>${file.name}</span>
         </div>
         <div class="file-size">${
-          file.type === "directory" ? "-" : this.formatSize(file.size)
+          file.size && file.size > 0 ? this.formatSize(file.size) : "-"
         }</div>
         <div class="file-date">${
           file.modifiedAt ? this.formatDate(file.modifiedAt) : "-"
@@ -769,10 +860,11 @@ class CloudFileManager {
   getFilteredAndSortedFiles() {
     if (!Array.isArray(this.files)) return [];
 
-    const query = this.searchQuery.trim().toLowerCase();
+    // Arama her zaman büyük/küçük harf ve Türkçe karakter duyarsız olsun
+    const query = this.normalizeSearchText(this.searchQuery.trim());
     const filtered = query
       ? this.files.filter((file) =>
-          file.name.toLowerCase().includes(query)
+          this.normalizeSearchText(file.name).includes(query)
         )
       : [...this.files];
 
@@ -805,7 +897,7 @@ class CloudFileManager {
   getSortValue(file, key) {
     switch (key) {
       case "size":
-        return file.type === "directory" ? 0 : file.size || 0;
+        return file.size || 0;
       case "date":
         return file.modifiedAt ? new Date(file.modifiedAt).getTime() : 0;
       case "type":
@@ -815,7 +907,55 @@ class CloudFileManager {
     }
   }
 
+  // Klasör boyutlarını arka planda hesapla ve listeyi güncelle
+  async updateFolderSizes() {
+    const directories = this.files.filter(
+      (file) => file.type === "directory"
+    );
+
+    if (!directories.length) return;
+
+    for (const dir of directories) {
+      try {
+        let sizeResult = null;
+
+        if (this.connectionType === "ftp") {
+          const remotePath =
+            this.currentPath === "/"
+              ? `/${dir.name}`
+              : `${this.currentPath.replace(/\/$/, "")}/${dir.name}`;
+
+          sizeResult = await window.electronAPI.ftpGetFolderSize(remotePath);
+        } else if (this.connectionType === "s3") {
+          const prefix =
+            this.currentPath === "/"
+              ? dir.key || dir.name
+              : dir.key || `${this.currentPath.replace(/\/$/, "")}/${dir.name}/`;
+
+          sizeResult = await window.electronAPI.s3GetFolderSize({
+            bucket: this.currentBucket,
+            prefix,
+          });
+        }
+
+        if (sizeResult && sizeResult.success) {
+          dir.size = sizeResult.size;
+          // Listeyi yeniden çiz (progress tarzı güncelleme için)
+          this.renderFileList();
+        }
+      } catch (error) {
+        console.warn(
+          "Klasör boyutu hesaplanamadı:",
+          dir.name,
+          error.message || error
+        );
+      }
+    }
+  }
+
   handleSearchInput(value) {
+    // Arama sorgusunu normalize et (boş ise "").
+    // Asıl büyük/küçük harf duyarsızlık getFilteredAndSortedFiles içinde sağlanıyor.
     this.searchQuery = value ?? "";
     this.renderFileList();
     
@@ -1574,6 +1714,16 @@ class CloudFileManager {
       }
     }
 
+    // Görsel önizleme URL'ini temizle
+    if (this.lastPreviewImageUrl) {
+      try {
+        URL.revokeObjectURL(this.lastPreviewImageUrl);
+      } catch (e) {
+        console.warn("Preview image URL revoke error:", e);
+      }
+      this.lastPreviewImageUrl = null;
+    }
+
     // Klavye event listener'ını kaldır
     document.removeEventListener("keydown", this.boundVideoNavigation);
     this.currentVideoIndex = -1;
@@ -2316,9 +2466,11 @@ class CloudFileManager {
     modal.classList.remove("hidden");
     document.getElementById("preview-image-name").textContent = fileName;
 
-    // Loader'ı göster, resmi gizle
+    // Loader'ı göster, resmi gizle ve eski event'leri/URL'i temizle
     loader.style.display = "flex";
     img.style.display = "none";
+    img.onload = null;
+    img.onerror = null;
     img.src = "";
 
     try {
@@ -2345,8 +2497,19 @@ class CloudFileManager {
 
       if (result.success) {
         // Base64 veriyi temizle (boşluk/yeni satır karakterlerini kaldır)
-        const cleanData = result.data.replace(/\s/g, "");
-        const dataUrl = `data:${result.mimeType};base64,${cleanData}`;
+        const cleanData = (result.data || "").replace(/\s/g, "");
+        const imageUrl = this.base64ToImageUrl(cleanData, result.mimeType);
+
+        if (!imageUrl) {
+          console.error("Image URL oluşturulamadı");
+          loader.style.display = "none";
+          this.showToast(
+            `Resim yüklenemedi: ${fileName}. Geçersiz veri alındı.`,
+            "error"
+          );
+          setTimeout(() => this.closeModals(), 2000);
+          return;
+        }
 
         img.onload = () => {
           console.log("Image loaded successfully");
@@ -2366,7 +2529,7 @@ class CloudFileManager {
           setTimeout(() => this.closeModals(), 2000);
         };
 
-        img.src = dataUrl;
+        img.src = imageUrl;
       } else {
         loader.style.display = "none";
         this.showToast(result.message || "Resim yüklenemedi", "error");
