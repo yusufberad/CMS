@@ -169,6 +169,86 @@ ipcMain.handle("ftp-download", async (event, { remotePath, localPath }) => {
   }
 });
 
+ipcMain.handle(
+  "ftp-download-folder",
+  async (event, { remotePath, localPath }) => {
+    try {
+      if (!ftpService) throw new Error("FTP bağlantısı yok");
+
+      // Klasör içindeki tüm videoları listele
+      const videos = await ftpService.listVideos(remotePath);
+
+      if (videos.length === 0) {
+        return {
+          success: false,
+          message: "Klasörde video dosyası bulunamadı!",
+          count: 0,
+        };
+      }
+
+      // Klasör yapısını koru - her video için hedef yol oluştur
+      let successCount = 0;
+      let failCount = 0;
+
+      // Kullanıcının seçtiği klasörün içine, uzak klasör ismiyle bir alt klasör oluştur
+      const normalizedRemotePathForName = remotePath.replace(/\/$/, "");
+      const baseFolderName =
+        path.basename(normalizedRemotePathForName) || "indirilen_videolar";
+      const baseLocalDir = path.join(localPath, baseFolderName);
+      if (!fs.existsSync(baseLocalDir)) {
+        fs.mkdirSync(baseLocalDir, { recursive: true });
+      }
+
+      for (const video of videos) {
+        try {
+          // Klasör yapısını koru
+          // Remote path'i normalize et
+          const normalizedRemotePath = remotePath.replace(/\/$/, "");
+          let relativePath = video.path;
+          
+          // Remote path'i kaldır
+          if (video.path.startsWith(normalizedRemotePath)) {
+            relativePath = video.path.substring(normalizedRemotePath.length);
+          }
+          
+          // Başındaki "/" karakterini kaldır ve Windows path separator'larını düzelt
+          relativePath = relativePath.replace(/^\//, "").replace(/\//g, path.sep);
+          
+          const targetPath = path.join(baseLocalDir, relativePath);
+
+          // Hedef klasörü oluştur
+          const targetDir = path.dirname(targetPath);
+          if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+          }
+
+          await ftpService.download(video.path, targetPath, (progress) => {
+            mainWindow.webContents.send("download-progress", {
+              ...progress,
+              fileName: video.name,
+            });
+          });
+
+          successCount++;
+        } catch (error) {
+          console.error(`Video indirme hatası (${video.name}):`, error);
+          failCount++;
+        }
+      }
+
+      return {
+        success: true,
+        message: `${successCount} video başarıyla indirildi${
+          failCount > 0 ? `, ${failCount} video indirilemedi` : ""
+        }!`,
+        count: successCount,
+      };
+    } catch (error) {
+      return { success: false, message: error.message, count: 0 };
+    }
+  }
+);
+
 ipcMain.handle("ftp-delete", async (event, remotePath) => {
   try {
     if (!ftpService) throw new Error("FTP bağlantısı yok");
@@ -268,6 +348,89 @@ ipcMain.handle("s3-download", async (event, { bucket, key, localPath }) => {
     return { success: false, message: error.message };
   }
 });
+
+ipcMain.handle(
+  "s3-download-folder",
+  async (event, { bucket, prefix, localPath }) => {
+    try {
+      if (!s3Service) throw new Error("S3 bağlantısı yok");
+
+      // Klasör içindeki tüm videoları listele
+      const videos = await s3Service.listVideos(bucket, prefix);
+
+      if (videos.length === 0) {
+        return {
+          success: false,
+          message: "Klasörde video dosyası bulunamadı!",
+          count: 0,
+        };
+      }
+
+      // Klasör yapısını koru - her video için hedef yol oluştur
+      let successCount = 0;
+      let failCount = 0;
+
+      // Kullanıcının seçtiği klasörün içine, uzak klasör ismiyle bir alt klasör oluştur
+      const normalizedPrefixForName = (prefix || "").replace(/\/$/, "");
+      const baseFolderName =
+        normalizedPrefixForName.split("/").filter(Boolean).pop() ||
+        "indirilen_videolar";
+      const baseLocalDir = path.join(localPath, baseFolderName);
+      if (!fs.existsSync(baseLocalDir)) {
+        fs.mkdirSync(baseLocalDir, { recursive: true });
+      }
+
+      for (const video of videos) {
+        try {
+          // Klasör yapısını koru
+          // Prefix'in sonunda "/" olup olmadığını kontrol et
+          const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+          let relativePath = video.key;
+          
+          // Prefix'i kaldır
+          if (video.key.startsWith(normalizedPrefix)) {
+            relativePath = video.key.substring(normalizedPrefix.length);
+          } else if (video.key.startsWith(prefix)) {
+            relativePath = video.key.substring(prefix.length);
+          }
+          
+          // Başındaki "/" karakterini kaldır
+          relativePath = relativePath.replace(/^\//, "");
+          
+          const targetPath = path.join(baseLocalDir, relativePath);
+
+          // Hedef klasörü oluştur
+          const targetDir = path.dirname(targetPath);
+          if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+          }
+
+          await s3Service.download(bucket, video.key, targetPath, (progress) => {
+            mainWindow.webContents.send("download-progress", {
+              ...progress,
+              fileName: video.name,
+            });
+          });
+
+          successCount++;
+        } catch (error) {
+          console.error(`Video indirme hatası (${video.name}):`, error);
+          failCount++;
+        }
+      }
+
+      return {
+        success: true,
+        message: `${successCount} video başarıyla indirildi${
+          failCount > 0 ? `, ${failCount} video indirilemedi` : ""
+        }!`,
+        count: successCount,
+      };
+    } catch (error) {
+      return { success: false, message: error.message, count: 0 };
+    }
+  }
+);
 
 ipcMain.handle("s3-delete", async (event, { bucket, key }) => {
   try {

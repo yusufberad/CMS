@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("ftp-get-folder-size", remotePath),
   ftpUpload: (data) => ipcRenderer.invoke("ftp-upload", data),
   ftpDownload: (data) => ipcRenderer.invoke("ftp-download", data),
+  ftpDownloadFolder: (data) => ipcRenderer.invoke("ftp-download-folder", data),
   ftpDelete: (remotePath) => ipcRenderer.invoke("ftp-delete", remotePath),
   ftpMkdir: (remotePath) => ipcRenderer.invoke("ftp-mkdir", remotePath),
 
@@ -28,6 +29,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("s3-get-folder-size", data),
   s3Upload: (data) => ipcRenderer.invoke("s3-upload", data),
   s3Download: (data) => ipcRenderer.invoke("s3-download", data),
+  s3DownloadFolder: (data) => ipcRenderer.invoke("s3-download-folder", data),
   s3Delete: (data) => ipcRenderer.invoke("s3-delete", data),
   s3Mkdir: (data) => ipcRenderer.invoke("s3-mkdir", data),
   s3Move: (data) => ipcRenderer.invoke("s3-move", data),

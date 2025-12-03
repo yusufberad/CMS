@@ -579,6 +579,62 @@ class S3Service {
 
     await this.client.send(command);
   }
+
+  // Klasör içindeki tüm videoları recursive olarak listele
+  async listVideos(bucket, prefix = "") {
+    const videoFiles = [];
+    const videoExtensions = [
+      ".mp4",
+      ".webm",
+      ".ogg",
+      ".ogv",
+      ".avi",
+      ".mov",
+      ".wmv",
+      ".flv",
+      ".mkv",
+      ".m4v",
+    ];
+
+    // Prefix sonu her zaman "/" ile bitsin (klasör mantığı)
+    const normalizedPrefix =
+      prefix && !prefix.endsWith("/") ? `${prefix}/` : prefix || "";
+
+    let continuationToken = undefined;
+
+    do {
+      const command = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: normalizedPrefix,
+        ContinuationToken: continuationToken,
+      });
+
+      const response = await this.client.send(command);
+
+      if (response.Contents) {
+        for (const object of response.Contents) {
+          // Klasörün kendisi (sadece prefix) ise atla
+          if (object.Key === normalizedPrefix) continue;
+
+          // Video uzantısı kontrolü
+          const ext = path.extname(object.Key).toLowerCase();
+          if (videoExtensions.includes(ext)) {
+            videoFiles.push({
+              name: path.basename(object.Key),
+              key: object.Key,
+              size: object.Size || 0,
+            });
+          }
+        }
+      }
+
+      continuationToken = response.IsTruncated
+        ? response.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+
+    return videoFiles;
+  }
 }
 
 module.exports = S3Service;

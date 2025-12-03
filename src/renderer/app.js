@@ -1142,9 +1142,8 @@ class CloudFileManager {
       key: item.dataset.key,
     };
 
-    // İndir ve Sil butonlarını etkinleştir (sadece dosyalar için indir)
-    document.getElementById("btn-download").disabled =
-      this.selectedFile.type === "directory";
+    // İndir ve Sil butonlarını etkinleştir (dosyalar ve klasörler için indir)
+    document.getElementById("btn-download").disabled = false;
     const deleteBtn = document.getElementById("btn-delete");
     if (deleteBtn) {
       deleteBtn.disabled = false;
@@ -1340,7 +1339,7 @@ class CloudFileManager {
   }
 
   async downloadFile() {
-    if (!this.selectedFile || this.selectedFile.type === "directory") return;
+    if (!this.selectedFile) return;
 
     // Transfer ID oluştur (debug için)
     const transferId = `download-${Date.now()}-${Math.random()
@@ -1354,6 +1353,65 @@ class CloudFileManager {
       connectionType: this.connectionType,
     });
 
+    // Klasör indirme
+    if (this.selectedFile.type === "directory") {
+      const result = await window.electronAPI.showOpenDialog({
+        title: "Klasör Seç",
+        properties: ["openDirectory"],
+      });
+
+      if (result.canceled || !result.filePaths || result.filePaths.length === 0)
+        return;
+
+      const targetDir = result.filePaths[0];
+      this.showProgress();
+
+      try {
+        if (this.connectionType === "ftp") {
+          const remotePath =
+            this.currentPath === "/"
+              ? `/${this.selectedFile.name}`
+              : `${this.currentPath}/${this.selectedFile.name}`;
+
+          const downloadResult = await window.electronAPI.ftpDownloadFolder({
+            remotePath,
+            localPath: targetDir,
+          });
+
+          if (downloadResult.success) {
+            this.showToast(
+              `${downloadResult.count} video indirildi!`,
+              "success"
+            );
+          } else {
+            this.showToast(downloadResult.message, "error");
+          }
+        } else {
+          const prefix = this.selectedFile.key || this.selectedFile.name;
+          const downloadResult = await window.electronAPI.s3DownloadFolder({
+            bucket: this.currentBucket,
+            prefix,
+            localPath: targetDir,
+          });
+
+          if (downloadResult.success) {
+            this.showToast(
+              `${downloadResult.count} video indirildi!`,
+              "success"
+            );
+          } else {
+            this.showToast(downloadResult.message, "error");
+          }
+        }
+      } catch (error) {
+        this.showToast(`İndirme hatası: ${error.message}`, "error");
+      }
+
+      this.hideProgress();
+      return;
+    }
+
+    // Dosya indirme (mevcut kod)
     const result = await window.electronAPI.showSaveDialog({
       title: "Kaydet",
       defaultPath: this.selectedFile.name,

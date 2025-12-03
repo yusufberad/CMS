@@ -194,6 +194,52 @@ class FTPService {
   async pwd() {
     return await this.client.pwd();
   }
+
+  // Klasör içindeki tüm videoları recursive olarak listele
+  async listVideos(remotePath = "/") {
+    const normalizedPath =
+      !remotePath || remotePath === "" ? "/" : remotePath;
+
+    const entries = await this.client.list(normalizedPath);
+    const videoFiles = [];
+    const videoExtensions = [
+      ".mp4",
+      ".webm",
+      ".ogg",
+      ".ogv",
+      ".avi",
+      ".mov",
+      ".wmv",
+      ".flv",
+      ".mkv",
+      ".m4v",
+    ];
+
+    for (const entry of entries) {
+      const entryPath =
+        normalizedPath === "/"
+          ? `/${entry.name}`
+          : `${normalizedPath.replace(/\/$/, "")}/${entry.name}`;
+
+      if (entry.type === 2) {
+        // Klasör - recursive olarak devam et
+        const subVideos = await this.listVideos(entryPath);
+        videoFiles.push(...subVideos);
+      } else {
+        // Dosya - video uzantısı kontrolü
+        const ext = path.extname(entry.name).toLowerCase();
+        if (videoExtensions.includes(ext)) {
+          videoFiles.push({
+            name: entry.name,
+            path: entryPath,
+            size: entry.size || 0,
+          });
+        }
+      }
+    }
+
+    return videoFiles;
+  }
 }
 
 module.exports = FTPService;
