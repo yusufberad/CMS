@@ -51,81 +51,8 @@
     <div class="main-container">
       <!-- Sidebar -->
       <aside class="sidebar">
-        <div class="connection-type">
-          <button class="conn-btn active" data-type="ftp">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                d="M4 17V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"
-              />
-              <path d="M8 21h8" />
-              <path d="M12 17v4" />
-            </svg>
-            <span>FTP</span>
-          </button>
-          <button class="conn-btn" data-type="s3">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
-            </svg>
-            <span>S3</span>
-          </button>
-        </div>
-
-        <!-- FTP Connection Form -->
-        <div class="connection-form" id="ftp-form">
-          <h3>FTP Bağlantısı</h3>
-          <div class="form-group">
-            <label>Sunucu</label>
-            <input type="text" id="ftp-host" placeholder="ftp.example.com" />
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>Port</label>
-              <input type="number" id="ftp-port" value="21" />
-            </div>
-            <div class="form-group">
-              <label>Güvenli</label>
-              <select id="ftp-secure">
-                <option value="false">Hayır</option>
-                <option value="true">Evet (FTPS)</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Kullanıcı Adı</label>
-            <input type="text" id="ftp-user" placeholder="username" />
-          </div>
-          <div class="form-group">
-            <label>Şifre</label>
-            <input type="password" id="ftp-password" placeholder="••••••••" />
-          </div>
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="ftp-remember" />
-              <span>Beni Hatırla (PIN ile giriş)</span>
-            </label>
-          </div>
-          <button class="btn-connect" id="ftp-connect-btn">
-            <span class="btn-text">Bağlan</span>
-            <span class="btn-loader"></span>
-          </button>
-        </div>
-
         <!-- S3 Connection Form -->
-        <div class="connection-form hidden" id="s3-form">
+        <div class="connection-form" id="s3-form">
           <h3>Amazon S3 Bağlantısı</h3>
           <div class="form-group">
             <label>Access Key ID</label>
@@ -1025,6 +952,77 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
 
+    <!-- Transfer Panel -->
+    <div class="transfer-panel hidden" id="transfer-panel">
+      <div class="transfer-header">
+        <h3>Aktarımlar</h3>
+        <button class="transfer-close" id="btn-close-transfers">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="transfer-tabs">
+        <button class="transfer-tab active" id="tab-uploads">
+          Yüklemeler <span class="tab-count" id="upload-count">0</span>
+        </button>
+        <button class="transfer-tab" id="tab-downloads">
+          İndirmeler <span class="tab-count" id="download-count">0</span>
+        </button>
+      </div>
+      <div class="transfer-content">
+        <div class="transfer-tab-content" id="uploads-list">
+          <div class="empty-transfers">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span>Aktif yükleme yok</span>
+          </div>
+        </div>
+        <div class="transfer-tab-content hidden" id="downloads-list">
+          <div class="empty-transfers">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>Aktif indirme yok</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Load modules first (in dependency order) -->
+    <script src="modules/utils.js"></script>
+    <script src="modules/ui-manager.js"></script>
+    <script src="modules/file-list-manager.js"></script>
+    <script src="modules/s3-manager.js"></script>
+    
+    <!-- Then load main app and crypto helper -->
     <script src="crypto-helper.js"></script>
     <script src="app.js"></script>
   </body>

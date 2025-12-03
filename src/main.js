@@ -8,12 +8,12 @@ const {
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const FTPService = require("./services/ftp-service");
+
 const S3Service = require("./services/s3-service");
 const http = require("http");
 
 let mainWindow;
-let ftpService = null;
+
 let s3Service = null;
 let videoStreamServer = null;
 let currentVideoPath = null;
@@ -102,174 +102,6 @@ ipcMain.on("window-maximize", () => {
 });
 ipcMain.on("window-close", () => mainWindow.close());
 
-// FTP İşlemleri
-ipcMain.handle("ftp-connect", async (event, config) => {
-  try {
-    ftpService = new FTPService();
-    await ftpService.connect(config);
-    return { success: true, message: "FTP bağlantısı başarılı!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-disconnect", async () => {
-  try {
-    if (ftpService) {
-      await ftpService.disconnect();
-      ftpService = null;
-    }
-    return { success: true };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-list", async (event, remotePath) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    const files = await ftpService.list(remotePath);
-    return { success: true, files };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-get-folder-size", async (event, remotePath) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    const size = await ftpService.getFolderSize(remotePath);
-    return { success: true, size };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-upload", async (event, { localPath, remotePath }) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    await ftpService.upload(localPath, remotePath, (progress) => {
-      mainWindow.webContents.send("upload-progress", progress);
-    });
-    return { success: true, message: "Dosya yüklendi!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-download", async (event, { remotePath, localPath }) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    await ftpService.download(remotePath, localPath, (progress) => {
-      mainWindow.webContents.send("download-progress", progress);
-    });
-    return { success: true, message: "Dosya indirildi!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle(
-  "ftp-download-folder",
-  async (event, { remotePath, localPath }) => {
-    try {
-      if (!ftpService) throw new Error("FTP bağlantısı yok");
-
-      // Klasör içindeki tüm videoları listele
-      const videos = await ftpService.listVideos(remotePath);
-
-      if (videos.length === 0) {
-        return {
-          success: false,
-          message: "Klasörde video dosyası bulunamadı!",
-          count: 0,
-        };
-      }
-
-      // Klasör yapısını koru - her video için hedef yol oluştur
-      let successCount = 0;
-      let failCount = 0;
-
-      // Kullanıcının seçtiği klasörün içine, uzak klasör ismiyle bir alt klasör oluştur
-      const normalizedRemotePathForName = remotePath.replace(/\/$/, "");
-      const baseFolderName =
-        path.basename(normalizedRemotePathForName) || "indirilen_videolar";
-      const baseLocalDir = path.join(localPath, baseFolderName);
-      if (!fs.existsSync(baseLocalDir)) {
-        fs.mkdirSync(baseLocalDir, { recursive: true });
-      }
-
-      for (const video of videos) {
-        try {
-          // Klasör yapısını koru
-          // Remote path'i normalize et
-          const normalizedRemotePath = remotePath.replace(/\/$/, "");
-          let relativePath = video.path;
-          
-          // Remote path'i kaldır
-          if (video.path.startsWith(normalizedRemotePath)) {
-            relativePath = video.path.substring(normalizedRemotePath.length);
-          }
-          
-          // Başındaki "/" karakterini kaldır ve Windows path separator'larını düzelt
-          relativePath = relativePath.replace(/^\//, "").replace(/\//g, path.sep);
-          
-          const targetPath = path.join(baseLocalDir, relativePath);
-
-          // Hedef klasörü oluştur
-          const targetDir = path.dirname(targetPath);
-          if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
-          }
-
-          await ftpService.download(video.path, targetPath, (progress) => {
-            mainWindow.webContents.send("download-progress", {
-              ...progress,
-              fileName: video.name,
-            });
-          });
-
-          successCount++;
-        } catch (error) {
-          console.error(`Video indirme hatası (${video.name}):`, error);
-          failCount++;
-        }
-      }
-
-      return {
-        success: true,
-        message: `${successCount} video başarıyla indirildi${
-          failCount > 0 ? `, ${failCount} video indirilemedi` : ""
-        }!`,
-        count: successCount,
-      };
-    } catch (error) {
-      return { success: false, message: error.message, count: 0 };
-    }
-  }
-);
-
-ipcMain.handle("ftp-delete", async (event, remotePath) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    await ftpService.delete(remotePath);
-    return { success: true, message: "Dosya silindi!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle("ftp-mkdir", async (event, remotePath) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    await ftpService.mkdir(remotePath);
-    return { success: true, message: "Klasör oluşturuldu!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
-
-// S3 İşlemleri
 ipcMain.handle("s3-connect", async (event, config) => {
   try {
     s3Service = new S3Service(config);
@@ -349,6 +181,103 @@ ipcMain.handle("s3-download", async (event, { bucket, key, localPath }) => {
   }
 });
 
+// Tüm aktif upload/download işlemlerini iptal et
+ipcMain.handle("cancel-all-transfers", async () => {
+  try {
+    if (s3Service && s3Service.cancelAllTransfers) {
+      try {
+        await s3Service.cancelAllTransfers();
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+// Transfer'ı duraklatma
+ipcMain.handle("pause-transfer", async (event, { connectionType }) => {
+  try {
+    if (!s3Service) {
+      return { success: false, message: "S3 bağlantısı yok" };
+    }
+    
+    // Debug: Aktif transfer sayısını göster
+    console.log("[PAUSE-DEBUG] Active uploads:", s3Service.activeUploads.size);
+    console.log("[PAUSE-DEBUG] Active downloads:", s3Service.activeDownloads.size);
+    console.log("[PAUSE-DEBUG] Active upload keys:", Array.from(s3Service.activeUploads.keys()));
+    console.log("[PAUSE-DEBUG] Active download keys:", Array.from(s3Service.activeDownloads.keys()));
+    
+    // Aktif transfer var mı kontrol et
+    const hasActiveTransfers = s3Service.activeUploads.size > 0 || s3Service.activeDownloads.size > 0;
+    if (!hasActiveTransfers) {
+      return { success: false, message: "Aktif transfer bulunamadı" };
+    }
+    
+    // İlk aktif transfer'ı bul ve duraklat
+    let fileName = null;
+    if (s3Service.activeUploads.size > 0) {
+      fileName = Array.from(s3Service.activeUploads.keys())[0];
+    } else if (s3Service.activeDownloads.size > 0) {
+      fileName = Array.from(s3Service.activeDownloads.keys())[0];
+    }
+    
+    console.log("[PAUSE-DEBUG] Pausing transfer for file:", fileName);
+    
+    // Pause fonksiyonu çağrılarak transfer duraklatılacak
+    const result = await s3Service.pauseTransfer(fileName);
+    console.log("[PAUSE-DEBUG] Pause result:", result);
+    return result;
+  } catch (error) {
+    console.error("[PAUSE-DEBUG] Error:", error);
+    return { success: false, message: error.message };
+  }
+});
+
+// Transfer'ı devam ettirme
+ipcMain.handle("resume-transfer", async (event, { connectionType }) => {
+  try {
+    if (!s3Service) {
+      return { success: false, message: "S3 bağlantısı yok" };
+    }
+    
+    // Duraklatılmış transfer var mı kontrol et
+    const hasPausedTransfers = s3Service.pausedUploads.size > 0 || s3Service.pausedDownloads.size > 0;
+    if (!hasPausedTransfers) {
+      return { success: false, message: "Duraklatılmış transfer bulunamadı" };
+    }
+    
+    // İlk duraklatılmış transfer'ı bul
+    let fileName = null;
+    let isUpload = false;
+    
+    if (s3Service.pausedUploads.size > 0) {
+      fileName = Array.from(s3Service.pausedUploads.keys())[0];
+      isUpload = true;
+    } else if (s3Service.pausedDownloads.size > 0) {
+      fileName = Array.from(s3Service.pausedDownloads.keys())[0];
+    }
+    
+    console.log("[RESUME-DEBUG] Resuming transfer for file:", fileName);
+    
+    // Resume fonksiyonu çağrılacak
+    const result = await s3Service.resumeTransfer(fileName, (progress) => {
+      if (isUpload) {
+        mainWindow.webContents.send("upload-progress", progress);
+      } else {
+        mainWindow.webContents.send("download-progress", progress);
+      }
+    });
+    
+    return result;
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
 ipcMain.handle(
   "s3-download-folder",
   async (event, { bucket, prefix, localPath }) => {
@@ -386,17 +315,17 @@ ipcMain.handle(
           // Prefix'in sonunda "/" olup olmadığını kontrol et
           const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
           let relativePath = video.key;
-          
+
           // Prefix'i kaldır
           if (video.key.startsWith(normalizedPrefix)) {
             relativePath = video.key.substring(normalizedPrefix.length);
           } else if (video.key.startsWith(prefix)) {
             relativePath = video.key.substring(prefix.length);
           }
-          
+
           // Başındaki "/" karakterini kaldır
           relativePath = relativePath.replace(/^\//, "");
-          
+
           const targetPath = path.join(baseLocalDir, relativePath);
 
           // Hedef klasörü oluştur
@@ -464,15 +393,7 @@ ipcMain.handle("s3-move", async (event, { bucket, sourceKey, destKey }) => {
   }
 });
 
-ipcMain.handle("ftp-move", async (event, { sourcePath, destPath }) => {
-  try {
-    if (!ftpService) throw new Error("FTP bağlantısı yok");
-    await ftpService.rename(sourcePath, destPath);
-    return { success: true, message: "Dosya taşındı!" };
-  } catch (error) {
-    return { success: false, message: error.message };
-  }
-});
+
 
 ipcMain.handle(
   "s3-generate-share-link",
@@ -544,6 +465,51 @@ ipcMain.handle("get-file-info", async (event, filePath) => {
     };
   } catch (error) {
     return { success: false, message: error.message };
+  }
+});
+
+// Yerel dosya/klasör yollarını recursive olarak dosya listesine aç
+// Her dosya için: tam yol, root'a göre relative yol ve root'un klasör adı döner
+ipcMain.handle("expand-paths-to-files", async (event, paths = []) => {
+  try {
+    const result = [];
+
+    const walk = (p, rootPath, rootIsDirectory) => {
+      if (!p) return;
+      if (!fs.existsSync(p)) return;
+
+      const stats = fs.statSync(p);
+      if (stats.isDirectory()) {
+        const entries = fs.readdirSync(p);
+        for (const entry of entries) {
+          walk(path.join(p, entry), rootPath, rootIsDirectory);
+        }
+      } else if (stats.isFile()) {
+        const relativePath = path
+          .relative(rootPath, p)
+          .replace(/\\/g, "/");
+        result.push({
+          fullPath: p,
+          relativePath,
+          baseName: path.basename(rootPath),
+          rootPath,
+          rootIsDirectory,
+        });
+      }
+    };
+
+    (paths || []).forEach((p) => {
+      if (!p) return;
+      if (!fs.existsSync(p)) return;
+      const stats = fs.statSync(p);
+      const rootIsDirectory = stats.isDirectory();
+      const rootPath = rootIsDirectory ? p : path.dirname(p);
+      walk(p, rootPath, rootIsDirectory);
+    });
+
+    return { success: true, files: result };
+  } catch (error) {
+    return { success: false, message: error.message, files: [] };
   }
 });
 
@@ -634,9 +600,9 @@ function detectImageMimeType(buffer, fileName) {
 // Resim önizleme için geçici indirme
 ipcMain.handle(
   "get-image-preview",
-  async (event, { type, remotePath, bucket, key }) => {
+  async (event, { bucket, key }) => {
     try {
-      console.log("Preview request:", { type, remotePath, bucket, key });
+      console.log("Preview request:", { bucket, key });
 
       const tempDir = path.join(
         app.getPath("temp"),
@@ -646,19 +612,13 @@ ipcMain.handle(
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      const fileName =
-        type === "ftp" ? path.basename(remotePath) : path.basename(key);
+      const fileName = path.basename(key);
       const tempPath = path.join(tempDir, `preview_${Date.now()}_${fileName}`);
 
       console.log("Downloading to:", tempPath);
 
-      if (type === "ftp") {
-        if (!ftpService) throw new Error("FTP bağlantısı yok");
-        await ftpService.download(remotePath, tempPath, () => {});
-      } else {
-        if (!s3Service) throw new Error("S3 bağlantısı yok");
-        await s3Service.download(bucket, key, tempPath, () => {});
-      }
+      if (!s3Service) throw new Error("S3 bağlantısı yok");
+      await s3Service.download(bucket, key, tempPath, () => {});
 
       console.log("Download completed, reading file...");
 
@@ -714,17 +674,16 @@ ipcMain.handle(
 // Video önizleme için chunk-based streaming
 ipcMain.handle(
   "get-video-preview",
-  async (event, { type, remotePath, bucket, key }) => {
+  async (event, { bucket, key }) => {
     const debugStart = Date.now();
     const debugLog = (stage) =>
       console.log(`[VIDEO-MAIN] ${stage} +${Date.now() - debugStart}ms`);
 
     try {
       debugLog("IPC_BAŞLADI");
-      console.log("Video preview request:", { type, remotePath, bucket, key });
+      console.log("Video preview request:", { bucket, key });
 
-      const fileName =
-        type === "ftp" ? path.basename(remotePath) : path.basename(key);
+      const fileName = path.basename(key);
       const videoId = `${Date.now()}_${fileName}`;
 
       // MIME type belirle
@@ -743,98 +702,26 @@ ipcMain.handle(
       };
       const mimeType = mimeTypes[ext] || "video/mp4";
 
-      if (type === "s3") {
-        // S3 için pre-signed URL kullan (en hızlı yöntem)
-        if (!s3Service) throw new Error("S3 bağlantısı yok");
+      // S3 için pre-signed URL kullan (en hızlı yöntem)
+      if (!s3Service) throw new Error("S3 bağlantısı yok");
 
-        debugLog("S3_PRESIGNED_URL_OLUŞTURULUYOR");
-        const signedUrl = await s3Service.getSignedUrl(bucket, key, 3600); // 1 saat geçerli
-        debugLog("S3_PRESIGNED_URL_HAZIR");
+      debugLog("S3_PRESIGNED_URL_OLUŞTURULUYOR");
+      const signedUrl = await s3Service.getSignedUrl(bucket, key, 3600); // 1 saat geçerli
+      debugLog("S3_PRESIGNED_URL_HAZIR");
 
-        return {
-          success: true,
-          streamUrl: signedUrl,
-          mimeType,
-          fileName,
-          isDirect: true, // Pre-signed URL kullanıldığını belirt
-        };
-      } else {
-        // FTP için progressive download + stream
-        if (!ftpService) throw new Error("FTP bağlantısı yok");
-
-        const tempDir = path.join(
-          app.getPath("temp"),
-          "cloud-file-manager-preview"
-        );
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
-        }
-
-        const tempPath = path.join(tempDir, videoId);
-
-        // Stream bilgisini kaydet
-        activeStreams.set(videoId, {
-          tempPath,
-          remotePath,
-          downloading: true,
-          bytesDownloaded: 0,
-          totalSize: 0,
-        });
-
-        // Arka planda indir
-        downloadVideoInBackground(remotePath, tempPath, videoId);
-
-        console.log("FTP stream started:", videoId);
-
-        return {
-          success: true,
-          streamUrl: `http://localhost:8888/video/${videoId}`,
-          mimeType,
-          fileName,
-          isDirect: false,
-        };
-      }
+      return {
+        success: true,
+        streamUrl: signedUrl,
+        mimeType,
+        fileName,
+        isDirect: true, // Pre-signed URL kullanıldığını belirt
+      };
     } catch (error) {
       console.error("Video preview error:", error);
       return { success: false, message: error.message };
     }
   }
 );
-
-// Arka planda video indir
-async function downloadVideoInBackground(remotePath, tempPath, videoId) {
-  try {
-    // Boş dosya oluştur (streaming için gerekli)
-    fs.writeFileSync(tempPath, "");
-
-    const writeStream = fs.createWriteStream(tempPath, { flags: "w" });
-
-    // FTP'den chunk chunk indir
-    await ftpService.download(remotePath, tempPath, (progress) => {
-      const streamInfo = activeStreams.get(videoId);
-      if (streamInfo) {
-        streamInfo.bytesDownloaded = progress.downloaded || 0;
-        streamInfo.totalSize = progress.total || 0;
-        console.log(
-          `Download progress for ${videoId}: ${progress.percentage}%`
-        );
-      }
-    });
-
-    const streamInfo = activeStreams.get(videoId);
-    if (streamInfo) {
-      streamInfo.downloading = false;
-      console.log(`Download completed for ${videoId}`);
-    }
-  } catch (error) {
-    console.error(`Background download error for ${videoId}:`, error);
-    const streamInfo = activeStreams.get(videoId);
-    if (streamInfo) {
-      streamInfo.downloading = false;
-      streamInfo.error = error.message;
-    }
-  }
-}
 
 // Video temizleme
 ipcMain.handle("cleanup-video", async (event, videoId) => {

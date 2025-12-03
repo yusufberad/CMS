@@ -6,18 +6,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   maximizeWindow: () => ipcRenderer.send("window-maximize"),
   closeWindow: () => ipcRenderer.send("window-close"),
 
-  // FTP işlemleri
-  ftpConnect: (config) => ipcRenderer.invoke("ftp-connect", config),
-  ftpDisconnect: () => ipcRenderer.invoke("ftp-disconnect"),
-  ftpList: (remotePath) => ipcRenderer.invoke("ftp-list", remotePath),
-  ftpGetFolderSize: (remotePath) =>
-    ipcRenderer.invoke("ftp-get-folder-size", remotePath),
-  ftpUpload: (data) => ipcRenderer.invoke("ftp-upload", data),
-  ftpDownload: (data) => ipcRenderer.invoke("ftp-download", data),
-  ftpDownloadFolder: (data) => ipcRenderer.invoke("ftp-download-folder", data),
-  ftpDelete: (remotePath) => ipcRenderer.invoke("ftp-delete", remotePath),
-  ftpMkdir: (remotePath) => ipcRenderer.invoke("ftp-mkdir", remotePath),
-
   // S3 işlemleri
   s3Connect: (config) => ipcRenderer.invoke("s3-connect", config),
   s3Disconnect: () => ipcRenderer.invoke("s3-disconnect"),
@@ -33,7 +21,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   s3Delete: (data) => ipcRenderer.invoke("s3-delete", data),
   s3Mkdir: (data) => ipcRenderer.invoke("s3-mkdir", data),
   s3Move: (data) => ipcRenderer.invoke("s3-move", data),
-  ftpMove: (data) => ipcRenderer.invoke("ftp-move", data),
   s3GenerateShareLink: (data) =>
     ipcRenderer.invoke("s3-generate-share-link", data),
   s3GetTags: (data) => ipcRenderer.invoke("s3-get-tags", data),
@@ -44,11 +31,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   showOpenDialog: (options) => ipcRenderer.invoke("show-open-dialog", options),
   showSaveDialog: (options) => ipcRenderer.invoke("show-save-dialog", options),
   getFileInfo: (filePath) => ipcRenderer.invoke("get-file-info", filePath),
+  expandPathsToFiles: (paths) =>
+    ipcRenderer.invoke("expand-paths-to-files", paths),
+  
+  // Transfer kontrolleri
+  pauseTransfer: (data) => ipcRenderer.invoke("pause-transfer", data),
+  resumeTransfer: (data) => ipcRenderer.invoke("resume-transfer", data),
 
   // Resim ve video önizleme
   getImagePreview: (data) => ipcRenderer.invoke("get-image-preview", data),
   getVideoPreview: (data) => ipcRenderer.invoke("get-video-preview", data),
   cleanupVideo: (videoId) => ipcRenderer.invoke("cleanup-video", videoId),
+
+  // Tüm aktif transferleri iptal et (upload + download)
+  cancelAllTransfers: () => ipcRenderer.invoke("cancel-all-transfers"),
 
   getPlatform: () => process.platform,
 

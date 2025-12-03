@@ -66,8 +66,13 @@ class S3Service {
     this.client = new S3Client(clientConfig);
     this.region = region;
 
-    // Active uploads tracking (streaming için)
-    this.activeUploads = new Map();
+    // Aktif upload/download takibi (iptal için)
+    this.activeUploads = new Map(); // key: fileName, value: { upload, controller, localPath, bucket, key, fileSize, uploadedBytes }
+    this.activeDownloads = new Map(); // key: fileName, value: { controller, stream }
+    
+    // Duraklatılmış transferler (resume için)
+    this.pausedUploads = new Map(); // key: fileName, value: { localPath, bucket, key, fileSize, uploadedBytes }
+    this.pausedDownloads = new Map(); // key: fileName, value: { bucket, key, localPath, fileSize, downloadedBytes }
 
     // Connection warming flag
     this._connectionWarmed = false;
@@ -272,6 +277,10 @@ class S3Service {
     );
     const uploadCreateStart = Date.now();
 
+    const abortController = new AbortController();
+
+    const internalId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const upload = new Upload({
       client: this.client,
       params: {
@@ -286,6 +295,7 @@ class S3Service {
       leavePartsOnError: false, // Hata durumunda temizle
       // Checksum hesaplamayı devre dışı bırak
       requestChecksumCalculation: false,
+      abortSignal: abortController.signal,
     });
 
     console.log(
@@ -293,6 +303,21 @@ class S3Service {
         Date.now() - uploadCreateStart
       }ms)`
     );
+
+    const fileName = path.basename(localPath);
+    let uploadedBytes = 0;
+
+    // Aktif upload'lar listesine ekle
+    this.activeUploads.set(fileName, {
+      upload,
+      abortController,
+      localPath,
+      bucket,
+      key,
+      fileSize,
+      uploadedBytes: 0,
+      internalId,
+    });
 
     // Progress tracking - throttle ile daha smooth
     let lastProgressTime = 0;
@@ -302,6 +327,13 @@ class S3Service {
     upload.on("httpUploadProgress", (progress) => {
       const now = Date.now();
 
+      // Uploaded bytes'ı kaydet
+      uploadedBytes = progress.loaded || 0;
+      const uploadInfo = this.activeUploads.get(fileName);
+      if (uploadInfo) {
+        uploadInfo.uploadedBytes = uploadedBytes;
+      }
+
       // İlk progress geldiğinde log
       if (!firstProgressReceived) {
         firstProgressReceived = true;
@@ -310,7 +342,7 @@ class S3Service {
         );
         console.log(
           `[S3-DEBUG] İlk yüklenen: ${(
-            (progress.loaded || 0) /
+            uploadedBytes /
             1024 /
             1024
           ).toFixed(2)} MB`
@@ -328,7 +360,7 @@ class S3Service {
             percentage: percentage || 0,
             uploaded: progress.loaded || 0,
             total: fileSize,
-            fileName: path.basename(localPath),
+            fileName,
           });
           lastProgressTime = now;
         }
@@ -340,12 +372,18 @@ class S3Service {
         Date.now() - uploadStartTime
       }ms)`
     );
-    await upload.done();
-    console.log(
-      `[S3-DEBUG] ✅ Upload tamamlandı! Toplam: ${
-        Date.now() - uploadStartTime
-      }ms`
-    );
+    try {
+      await upload.done();
+      console.log(
+        `[S3-DEBUG] ✅ Upload tamamlandı! Toplam: ${
+          Date.now() - uploadStartTime
+        }ms`
+      );
+      this.activeUploads.delete(fileName);
+    } catch (error) {
+      this.activeUploads.delete(fileName);
+      throw error;
+    }
   }
 
   async uploadSmallObject({ localPath, bucket, key, fileSize, onProgress }) {
@@ -382,7 +420,10 @@ class S3Service {
     );
   }
 
-  async download(bucket, key, localPath, onProgress) {
+  // Dosyayı indir
+  async download(bucket, key, localPath, onProgress, options = {}) {
+    const startByte = options.startByte || 0;
+    
     // Önce dosya boyutunu al
     const headCommand = new HeadObjectCommand({
       Bucket: bucket,
@@ -396,9 +437,15 @@ class S3Service {
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
+      Range: `bytes=${startByte}-`,
     });
 
-    const response = await this.client.send(command);
+    const abortController = new AbortController();
+    const fileName = path.basename(key); // Dosya adını key olarak kullan
+
+    const response = await this.client.send(command, {
+      abortSignal: abortController.signal,
+    });
 
     // Hedef klasörü oluştur
     const dir = path.dirname(localPath);
@@ -406,20 +453,39 @@ class S3Service {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Stream'i dosyaya yaz - büyük buffer ile kesintisiz akış
+    // Stream'i dosyaya yaz
+    // startByte > 0 ise append modunda aç
     const writeStream = fs.createWriteStream(localPath, {
-      highWaterMark: 64 * 1024 * 1024, // 64MB buffer - Google Drive tarzı
+      highWaterMark: 64 * 1024 * 1024,
+      flags: startByte > 0 ? 'a' : 'w',
     });
 
-    let downloaded = 0;
+    // Aktif download'lar listesine ekle
+    this.activeDownloads.set(fileName, {
+      abortController,
+      stream: writeStream,
+      bucket,
+      key,
+      localPath,
+      fileSize,
+      downloadedBytes: startByte,
+      startTime: Date.now()
+    });
+
+    let downloaded = startByte;
     let lastProgressTime = 0;
-    const progressThrottle = 50; // 50ms throttle
+    const progressThrottle = 50;
 
     response.Body.on("data", (chunk) => {
       const now = Date.now();
       downloaded += chunk.length;
 
-      // Throttled progress updates - daha smooth
+      // Map'teki bilgiyi güncelle
+      const activeDownload = this.activeDownloads.get(fileName);
+      if (activeDownload) {
+        activeDownload.downloadedBytes = downloaded;
+      }
+
       if (
         onProgress &&
         (now - lastProgressTime >= progressThrottle || downloaded === fileSize)
@@ -429,13 +495,17 @@ class S3Service {
           percentage,
           downloaded,
           total: fileSize,
-          fileName: path.basename(key),
+          fileName,
         });
         lastProgressTime = now;
       }
     });
 
-    await pipeline(response.Body, writeStream);
+    try {
+      await pipeline(response.Body, writeStream);
+    } finally {
+      this.activeDownloads.delete(fileName);
+    }
   }
 
   async delete(bucket, key) {
@@ -580,6 +650,55 @@ class S3Service {
     await this.client.send(command);
   }
 
+  // Devam eden tüm upload/download işlemlerini iptal et
+  async cancelAllTransfers() {
+    console.log("[S3] Tüm transferler iptal ediliyor...");
+    
+    // Upload'lar
+    for (const [id, entry] of this.activeUploads.entries()) {
+      try {
+        if (entry.upload && entry.upload.abort) {
+          await entry.upload.abort();
+        }
+        if (entry.abortController) {
+          entry.abortController.abort();
+        }
+      } catch (error) {
+        console.error(`[S3] Upload iptal hatası:`, error);
+      }
+    }
+    this.activeUploads.clear();
+
+    // Download'lar
+    for (const [id, entry] of this.activeDownloads.entries()) {
+      try {
+        if (entry.abortController) {
+          entry.abortController.abort();
+        }
+        if (entry.stream) {
+          entry.stream.destroy();
+        }
+        
+        // Yarım kalan dosyayı sil
+        if (entry.localPath && fs.existsSync(entry.localPath)) {
+          try {
+            fs.unlinkSync(entry.localPath);
+            console.log(`[S3] İptal edilen dosya silindi: ${entry.localPath}`);
+          } catch (err) {
+            console.warn(`[S3] Dosya silinemedi: ${err.message}`);
+          }
+        }
+      } catch (error) {
+        console.error(`[S3] Download iptal hatası:`, error);
+      }
+    }
+    this.activeDownloads.clear();
+    
+    // Paused transferleri de temizle
+    this.pausedUploads.clear();
+    this.pausedDownloads.clear();
+  }
+
   // Klasör içindeki tüm videoları recursive olarak listele
   async listVideos(bucket, prefix = "") {
     const videoFiles = [];
@@ -635,6 +754,127 @@ class S3Service {
 
     return videoFiles;
   }
+
+  // Transfer'ı duraklat (pause)
+  pauseTransfer(fileName) {
+    // Önce upload'lara bak
+    const uploadInfo = this.activeUploads.get(fileName);
+    if (uploadInfo) {
+      try {
+        uploadInfo.abortController.abort();
+
+        this.pausedUploads.set(fileName, {
+          localPath: uploadInfo.localPath,
+          bucket: uploadInfo.bucket,
+          key: uploadInfo.key,
+          fileSize: uploadInfo.fileSize,
+          uploadedBytes: uploadInfo.uploadedBytes,
+        });
+
+        this.activeUploads.delete(fileName);
+
+        console.log(`[S3] Upload duraklatıldı: ${fileName}`);
+        return { success: true, uploadedBytes: uploadInfo.uploadedBytes };
+      } catch (error) {
+        return { success: false, message: error.message };
+      }
+    }
+
+    // Sonra download'lara bak
+    const downloadInfo = this.activeDownloads.get(fileName);
+    if (!downloadInfo) {
+      return { success: false, message: "Aktif transfer bulunamadı" };
+    }
+
+    try {
+      if (downloadInfo.abortController) {
+        downloadInfo.abortController.abort();
+      }
+      if (downloadInfo.stream) {
+        downloadInfo.stream.destroy();
+      }
+
+      this.pausedDownloads.set(fileName, {
+        bucket: downloadInfo.bucket,
+        key: downloadInfo.key,
+        localPath: downloadInfo.localPath,
+        downloadedBytes: downloadInfo.downloadedBytes || 0,
+      });
+
+      this.activeDownloads.delete(fileName);
+
+      console.log(`[S3] Download duraklatıldı: ${fileName}, İndirilen: ${downloadInfo.downloadedBytes}`);
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  // Transfer'ı devam ettir (resume)
+  async resumeTransfer(fileName, onProgress) {
+    const pausedUpload = this.pausedUploads.get(fileName);
+    const pausedDownload = this.pausedDownloads.get(fileName);
+
+    if (!pausedUpload && !pausedDownload) {
+      return { success: false, message: "Duraklatılmış transfer bulunamadı" };
+    }
+
+    try {
+      console.log(`[S3] Transfer devam ettiriliyor: ${fileName}`);
+
+      if (pausedUpload) {
+        this.pausedUploads.delete(fileName);
+        // Arka planda başlat (await etme)
+        this.upload(
+          pausedUpload.localPath,
+          pausedUpload.bucket,
+          pausedUpload.key,
+          onProgress
+        ).catch(err => {
+          console.error(`[S3] Resume upload hatası (${fileName}):`, err);
+        });
+      } else if (pausedDownload) {
+      this.pausedDownloads.delete(fileName);
+      
+      // Resume ederken diskteki dosya boyutunu kontrol et
+      let startByte = 0;
+      try {
+        if (fs.existsSync(pausedDownload.localPath)) {
+          const stats = fs.statSync(pausedDownload.localPath);
+          startByte = stats.size;
+          console.log(`[S3] Resume: Diskteki dosya boyutu: ${startByte} bytes`);
+        }
+      } catch (err) {
+        console.warn("[S3] Resume: Dosya boyutu okunamadı, 0'dan başlanıyor", err);
+      }
+
+      // Arka planda başlat (await etme)
+      this.download(
+        pausedDownload.bucket,
+        pausedDownload.key,
+        pausedDownload.localPath,
+        onProgress,
+        { startByte: startByte }
+      ).catch(err => {
+        console.error(`[S3] Resume download hatası (${fileName}):`, err);
+      });
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+}
+
+
+  // Duraklatılmış transferleri listele
+  getPausedTransfers() {
+    return Array.from(this.pausedUploads.entries()).map(([fileName, info]) => ({
+      fileName,
+      ...info,
+    }));
+  }
 }
 
 module.exports = S3Service;
+
